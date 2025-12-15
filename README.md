@@ -33,9 +33,3 @@ Quy trình nghiên cứu của chúng tôi bao gồm bốn giai đoạn chính:
 3.  **Giảm chiều và Phân tích Khám phá:** Sử dụng **Phân tích Thành phần Chính (PCA)** để giảm số chiều của dữ liệu, kết hợp với các phương pháp trực quan hóa như **t-SNE** và **UMAP** để đánh giá khả năng phân tách của các đặc trưng.
 4.  **Xây dựng và Đánh giá Mô hình:** So sánh hiệu suất của các thuật toán phân loại như **Hồi quy Logisitc**, **Support Vector Machine (SVM)** và **Random Forest** thông qua **Cross-Validation 10 lần** để đảm bảo tính ổn định.
 
----
-
-## Cài đặt và Chạy Dự án
-Để chạy dự án, bạn cần cài đặt các thư viện Python sau:
-```bash
-pip install numpy pandas scikit-learn matplotlib seaborn
