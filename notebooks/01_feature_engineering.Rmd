@@ -1,0 +1,499 @@
+---
+title: "Trích xuất Đặc trưng (Feature Engineering)\n"
+author: "22110012 - Hữu Ân  \n\n 22110059 - Hồng Hiên\n"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: yes
+    toc_depth: 3
+    toc_float: true
+    number_sections: false
+    theme: united
+    highlight: tango
+    mathjax: default
+  pdata_document:
+    toc: true
+    toc_depth: '3'
+---
+
+```{css, echo=FALSE}
+.tocify {
+  background-color: #f0f8ff;  /* Màu nền sidebar (Alice Blue) */
+  border-radius: 8px;
+  padding: 10px;
+  border: 1px solid #cce;
+  box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
+}
+
+.tocify-header {
+  color: #004085; /* Màu tiêu đề TOC */
+  font-weight: bold;
+}
+
+.tocify-item.active {
+  background-color: #d1ecf1; /* Màu khi mục đang active */
+}
+```
+
+```{r setup, include=FALSE}
+# --- Cài đặt các thư viện cần thiết ---
+# install.packages(c(
+#   "tidyverse", "moments", "seewave", "wavelets", "TSEntropies",
+#   "caret", "themis", "recipes", "randomForest", "e1071",
+#   "patchwork", "pracma", "pROC", "Rtsne", "MASS",
+#   "psych", "uwot", "biotools", "mvnormtest"
+# ))
+
+# --- Thiết lập chung ---
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.align = 'center')
+
+# --- Xử lý dữ liệu và trực quan hóa ---
+library(tidyverse)    # Xử lý dữ liệu, vẽ ggplot
+library(patchwork)    # Sắp xếp biểu đồ ggplot
+
+# --- Phân tích thống kê và kiểm định ---
+library(moments)      # Skewness, kurtosis
+library(psych)        # KMO, Bartlett, FA
+library(biotools)     # Box's M test
+library(mvnormtest)   # Kiểm định phân phối chuẩn đa biến
+
+# --- Phân tích tín hiệu và đặc trưng ---
+library(seewave)      # Phân tích tín hiệu
+library(wavelets)     # Biến đổi wavelet
+library(TSEntropies)  # Tính entropy
+library(pracma)       # Tích phân trapz, tiện ích toán học
+
+# --- Học máy và tiền xử lý ---
+library(caret)        # Bộ công cụ học máy
+library(themis)       # SMOTE cho xử lý mất cân bằng
+library(recipes)      # Pipeline tiền xử lý
+library(randomForest) # Mô hình Random Forest
+library(e1071)        # Mô hình SVM
+
+# --- Giảm chiều và trực quan hóa ---
+library(Rtsne)        # t-SNE
+library(uwot)         # UMAP
+library(MASS)         # LDA
+```
+
+# I. Tổng quan đề tài
+
+**1.1. Bối cảnh và Vấn đề nghiên cứu**
+
+Điện não đồ (EEG) là công cụ không thể thiếu trong chẩn đoán và theo dõi bệnh động kinh — một rối loạn thần kinh đặc trưng bởi các cơn co giật bất thường do hoạt động điện không ổn định trong não. Việc phát hiện chính xác và kịp thời các cơn động kinh có vai trò cốt lõi trong việc điều trị và nâng cao chất lượng sống cho người bệnh.
+
+Tuy nhiên, quy trình phân tích tín hiệu EEG thủ công hiện nay bộc lộ nhiều hạn chế lớn: tốn nhiều thời gian, phụ thuộc nặng nề vào kinh nghiệm của chuyên gia dẫn đến tính chủ quan, và khó có thể mở rộng để đáp ứng nhu cầu sàng lọc trên quy mô lớn. Những thách thức này đòi hỏi một giải pháp thay thế hiệu quả hơn.
+
+Để giải quyết vấn đề này, nghiên cứu đề xuất xây dựng và đánh giá một hệ thống học máy hoàn toàn tự động, với khả năng học hỏi các đặc trưng ẩn của tín hiệu và phân loại chính xác trạng thái co giật.
+
+**1.2. Câu hỏi và Mục tiêu nghiên cứu**
+
+Nghiên cứu này được định hướng bởi hai câu hỏi trọng tâm:
+
+1.  Liệu các đặc trưng được trích xuất từ miền thời gian, tần số và wavelet,... có đủ khả năng để phân biệt một cách đáng tin cậy giữa trạng thái co giật (seizure) và không co giật (non-seizure) từ các đoạn EEG ngắn hay không?
+
+2.  Việc áp dụng các kỹ thuật giảm chiều như Phân tích Thành phần Chính (PCA) ảnh hưởng như thế nào đến sự cân bằng giữa độ chính xác phân loại và hiệu quả tính toán của mô hình?
+
+Dựa trên các câu hỏi đó, mục tiêu cuối cùng của nghiên cứu là xây dựng, so sánh và xác định mô hình phân loại hiệu quả nhất, từ đó cung cấp một phương pháp luận vững chắc cho việc phát hiện cơn động kinh tự động.
+
+---
+
+# II. Dữ liệu và Phương pháp luận
+
+**2.1. Mô tả bộ dữ liệu**
+
+**Nguồn gốc dữ liệu**
+
+Nghiên cứu sử dụng bộ dữ liệu công khai **"Epileptic Seizure Recognition"** từ nền tảng Kaggle. Đây là một phiên bản đã qua xử lý của một bộ dữ liệu gốc nổi tiếng từ nghiên cứu của Andrzejak et al. (2001). Dữ liệu gốc được thu thập nhằm phân tích hoạt động điện não trong các trạng thái và vùng não khác nhau.
+
+**Cấu trúc dữ liệu gốc**
+
+Dữ liệu gốc bao gồm 5 bộ (datasets), ký hiệu từ A đến E, mỗi bộ chứa 100 tệp tín hiệu EEG đơn kênh, tương ứng với 5 nhóm đối tượng khác nhau:
+
+* **Nhóm E (Tương ứng nhãn y=1):** Gồm các tín hiệu EEG được ghi lại **trong khi bệnh nhân đang có cơn co giật** (trạng thái ictal).
+
+* **Nhóm D (Tương ứng nhãn y=2):** Tín hiệu được ghi từ vùng có khối u trong não của bệnh nhân giữa các cơn co giật (trạng thái interictal).
+
+* **Nhóm C (Tương ứng nhãn y=3):** Tín hiệu được ghi từ vùng não khỏe mạnh ở bán cầu đối diện với vùng có khối u của bệnh nhân, cũng trong trạng thái interictal.
+
+* **Nhóm B (Tương ứng nhãn y=4):** Tín hiệu từ những người tình nguyện khỏe mạnh khi đang **nhắm mắt**.
+
+* **Nhóm A (Tương ứng nhãn y=5):** Tín hiệu từ những người tình nguyện khỏe mạnh khi đang **mở mắt**.
+
+Mỗi tệp tín hiệu gốc có độ dài 4097 điểm dữ liệu, được ghi trong khoảng 23.5 giây.
+
+**Quá trình tạo ra bộ dữ liệu trên Kaggle**
+
+[Bộ dữ liệu Epileptic Seizure Recognition trên Kaggle](https://www.kaggle.com/datasets/yasserhessein/epileptic-seizure-recognition/data)
+
+Để tạo ra bộ dữ liệu `.csv` được sử dụng trong nghiên cứu này, các nhà khoa học đã thực hiện các bước sau:
+
+1.  Mỗi tín hiệu gốc (dài 4097 điểm) được chia thành 23 đoạn nhỏ không chồng chéo lên nhau.
+
+2.  Mỗi đoạn nhỏ này có độ dài **178 điểm dữ liệu**, tương ứng với **1 giây** ghi nhận tín hiệu.
+
+3.  Quá trình này tạo ra tổng cộng **11,500 mẫu** (500 tín hiệu gốc × 23 đoạn/tín hiệu). Mỗi mẫu này trở thành một hàng trong tệp `.csv`.
+
+Như vậy, bộ dữ liệu cuối cùng có cấu trúc:
+
+* **Cấu trúc:** 11,500 hàng (mẫu), mỗi hàng là một đoạn tín hiệu EEG dài 1 giây.
+
+* **Đặc trưng:** Mỗi hàng có 178 cột đặc trưng (từ `X1` đến `X178`), đại diện cho các giá trị điện thế của tín hiệu.
+
+* **Nhãn:** Mỗi hàng được gán một nhãn `y` từ 1 đến 5, tương ứng với 5 nhóm đối tượng ban đầu đã mô tả ở trên.
+
+**2.2. Xác lập bài toán phân loại nhị phân**
+
+Để tập trung vào mục tiêu chính là phát hiện cơn động kinh, bài toán đa lớp ban đầu được chuyển đổi thành một bài toán phân loại nhị phân. Các nhãn được xử lý như sau:
+
+* **Lớp 1 (Seizure):** Gồm các đoạn tín hiệu được ghi lại trong lúc xảy ra cơn động kinh (nhãn gốc `y = 1`).
+* **Lớp 0 (Non-Seizure):** Gồm tất cả các đoạn tín hiệu còn lại, bao gồm trạng thái mắt mở, mắt nhắm, và hoạt động não bình thường (nhãn gốc `y` từ 2 đến 5).
+
+**2.3. Quy trình nghiên cứu tổng quan**
+
+Nghiên cứu được triển khai theo một quy trình gồm 4 giai đoạn chính:
+
+1.  **Chuẩn bị dữ liệu:** Chuyển đổi bài toán sang dạng nhị phân (co giật/không co giật).
+
+2.  **Trích xuất đặc trưng (Feature Engineering):** Từ 178 điểm dữ liệu thô của mỗi mẫu, tiến hành trích xuất một bộ đặc trưng mới có ý nghĩa hơn, bao gồm các đặc trưng thống kê từ miền thời gian, năng lượng các dải tần số (Delta, Theta, Alpha, Beta, Gamma), và năng lượng các mức phân rã wavelet.
+
+3.  **Phân tích Khám phá và Giảm chiều:** Sử dụng các kỹ thuật thống kê đa biến (PCA, FA, MANOVA) và các phương pháp trực quan hóa phi tuyến (t-SNE, UMAP) để khám phá cấu trúc dữ liệu, kiểm tra khả năng phân tách của các lớp, và đánh giá hiệu quả của việc giảm chiều.
+
+4.  **Xây dựng và Đánh giá Mô hình:** Áp dụng kỹ thuật SMOTE trên tập huấn luyện để xử lý mất cân bằng lớp. Sau đó, huấn luyện và so sánh hiệu năng của các thuật toán (LDA, SVM, Random Forest) thông qua kiểm định chéo 10 lần. Cuối cùng, đánh giá mô hình tốt nhất trên tập kiểm tra để đưa ra kết luận cuối cùng.
+
+```{r load-data}
+# Tải dữ liệu
+df <- readr::read_csv("Epileptic Seizure Recognition.csv")
+
+# Bỏ cột định danh đầu tiên.
+df <- df %>% dplyr::select(-1)
+
+# Chuyển đổi biến mục tiêu
+# Cột mục tiêu là 'y'
+df <- df %>%
+  mutate(y = ifelse(y == 1, 1, 0))
+
+# Hiện thị 6 dòng đầu
+head(df)
+
+# Tách tập đặc trưng (X) và biến mục tiêu (y)
+X_original <- df %>% dplyr::select(-y)
+y_labels <- df$y
+```
+
+
+```{r}
+library(patchwork) # Dùng để ghép 2 biểu đồ
+
+# Lấy 1 mẫu KHÔNG co giật (y=0)
+non_seizure_sample <- df %>% filter(y == 0) %>% sample_n(1) %>% dplyr::select(-y) %>% as.numeric()
+# Lấy 1 mẫu CÓ co giật (y=1)
+seizure_sample <- df %>% filter(y == 1) %>% sample_n(1) %>% dplyr::select(-y) %>% as.numeric()
+
+# Hàm phụ để vẽ biểu đồ cho gọn
+plot_eeg <- function(signal, plot_title) {
+  tibble(time_step = 1:length(signal), amplitude = signal) %>%
+    ggplot(aes(x = time_step, y = amplitude)) +
+    geom_line() +
+    labs(title = plot_title, x = "Bước Thời gian", y = "Biên độ") +
+    theme_minimal()
+}
+
+# Vẽ 2 biểu đồ
+p1 <- plot_eeg(non_seizure_sample, "Tín hiệu mẫu: Không Co giật (Non-Seizure)")
+p2 <- plot_eeg(seizure_sample, "Tín hiệu mẫu: Có Co giật (Seizure)")
+
+# Ghép 2 biểu đồ lại để so sánh
+p1 + p2
+```
+
+# III. Trích xuất Đặc trưng (Feature Engineering)
+
+## 3.1. Đặc trưng Miền Thời gian (Time Domain features)
+
+Trước khi trích xuất ta vẽ một tín hiệu ngẫu nhiên theo miền thời gian
+```{r plot-signal}
+# Lấy một mẫu tín hiệu ngẫu nhiên từ X
+set.seed(42) # Để kết quả có thể tái lập
+signal_sample <- X_original %>% dplyr::sample_n(1) %>% as.numeric()
+
+# Tạo biểu đồ
+tibble(
+  time_step = 1:length(signal_sample),
+  amplitude = signal_sample
+) %>%
+  ggplot(aes(x = time_step, y = amplitude)) +
+  geom_line(color = "dodgerblue") +
+  geom_point(color = "dodgerblue", size = 1) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red", alpha = 0.5) +
+  labs(
+    title = "Biểu đồ một tín hiệu mẫu trong 1 giây",
+    x = "Bước Thời gian",
+    y = "Biên độ"
+  ) +
+  theme_minimal() +
+  # SỬA LỖI Ở ĐÂY
+  theme(panel.grid.major = element_line(linetype = "dashed", color="gray80"),
+        panel.grid.minor = element_blank())
+```
+
+Biểu đồ này được gọi là tín hiệu `miền thời gian` và cho thấy biên độ của tín hiệu thay đổi theo thời gian như thế nào. Từ biểu đồ này, chúng ta sẽ trích xuất một số thống kê tiêu chuẩn giúp mô tả đặc tính của tín hiệu. Chúng ta sẽ giải thích những cái ít phổ biến hơn ở dưới đây.
+
+```{r time-features-function}
+# Hàm để trích xuất các đặc trưng miền thời gian
+extract_time_domain_features <- function(signal) {
+  # Các thống kê cơ bản
+  mean_val <- mean(signal)
+  std_val <- sd(signal)
+  var_val <- var(signal)
+  min_val <- min(signal)
+  max_val <- max(signal)
+  skew_val <- moments::skewness(signal)
+  kurt_val <- moments::kurtosis(signal)
+  rms_val <- sqrt(mean(signal^2))
+  zero_crossings <- sum(diff(sign(signal)) != 0)
+  
+  # Giá trị tuyệt đối lớn nhất
+  abs_max <- max(abs(c(min_val, max_val)))
+  
+  # Các hệ số (Factors)
+  crest_factor <- abs_max / rms_val
+  margin_factor <- abs_max / var_val
+  shape_factor <- rms_val / mean(abs(signal))
+  impulse_factor <- abs_max / mean(abs(signal))
+  
+  # Trả về một tibble (data frame)
+  tibble(
+    mean = mean_val, std = std_val, var = var_val, min = min_val, max = max_val,
+    skew = skew_val, kurtosis = kurt_val, rms = rms_val,
+    zero_crossings = zero_crossings, abs_max = abs_max,
+    crest_factor = crest_factor, margin_factor = margin_factor,
+    shape_factor = shape_factor, impulse_factor = impulse_factor
+  )
+}
+```
+
+**Crest factor** được định nghĩa là tỷ lệ giữa giá trị tuyệt đối lớn nhất của tín hiệu và giá trị RMS của nó:
+
+$$
+C(y_n) = \frac{\max |y_n|}{RMS(y_n)} \qquad \text{với } RMS{(y_n)} = \sqrt{\frac{1}{N} \sum_{n=1}^N y_n^2},
+$$
+
+Điều này thể hiện đỉnh cao nhất lớn như thế nào so với công suất trung bình của tín hiệu. Nó cung cấp một thước đo về mức độ cực đoan của các đỉnh trong tín hiệu so với năng lượng tổng thể của nó.
+
+**Margin factor** có khái niệm tương tự nhưng so sánh giá trị tuyệt đối lớn nhất với phương sai của tín hiệu:
+
+$$
+M = \frac{\max |y_n|}{\text{Var}(y_n)}, \qquad \text{với } \text{Var}(y_n) = \frac{1}{N} \sum_{n=1}^N \left( y_n - \bar{y} \right)^2
+$$
+
+Điều này phản ánh kích thước của đỉnh cao nhất so với độ phân tán (phương sai) của tín hiệu. Người đọc có thể nhận thấy rằng khi giá trị trung bình của tín hiệu bằng không, ví dụ như trong nhiễu trắng, crest factor và margin factor trùng nhau vì phương sai chính là RMS lấy trung tâm tại giá trị trung bình, tức là 0 trong trường hợp này.
+
+**Shape factor** đo lường cách giá trị RMS so sánh với Giá trị Tuyệt đối Trung bình (Mean Absolute Value - MAV). Chỉ số này, thay vì định lượng đỉnh cực đại như các chỉ số trước, nó mô tả số lượng các đỉnh và cường độ của chúng. Lưu ý rằng các đỉnh càng cao, sự khác biệt giữa giá trị bình phương và giá trị tuyệt đối của nó càng lớn, do đó phân số tăng lên.
+
+$$
+S(y_n) = \frac{\text{RMS}}{\text{MAV}},  \quad \text{MAV} = \frac{1}{N} \sum_{n=1}^N |y_n|
+$$
+
+**Impulse factor** là một thước đo liên quan khác, so sánh giá trị tuyệt đối lớn nhất với MAV. Tương tự, impulse factor làm nổi bật sự thống trị của đỉnh cao nhất của tín hiệu so với độ lớn điển hình của nó.
+
+$$
+I = \frac{\max |y_n|}{\text{MAV}}
+$$
+
+## 3.2. Đặc trưng Miền Tần số (Frequency Domain features)
+
+Mục đích là chuyển đổi từ miền thời gian để phân tích sự phân bố của các tần số, được gọi là các dải công suất. Việc chuyển đổi tín hiệu EEG từ miền thời gian sang miền tần số cho phép chúng ta **tiết lộ các cấu trúc tuần hoàn ẩn, phân biệt các trạng thái nhận thức khác nhau, và phát hiện hoạt động thần kinh bất thường**, chẳng hạn như những gì thấy trong bệnh động kinh hoặc rối loạn giấc ngủ.
+
+Một trong những phương pháp có thể được sử dụng cho việc này là phương pháp Welch, một kỹ thuật để ước tính **Mật độ Phổ Công suất (PSD)** của tín hiệu bằng cách giảm phương sai thông qua việc lấy trung bình nhiều biểu đồ chu kỳ (periodogram). Nó hoạt động bằng cách chia tín hiệu EEG thành các đoạn chồng chéo, áp dụng một hàm cửa sổ (như Hamming hoặc Hanning) để giảm rò rỉ phổ, tính toán **Biến đổi Fourier Rời rạc (DFT)** cho mỗi đoạn, và sau đó lấy trung bình các bình phương độ lớn của các đoạn đã biến đổi. Về mặt toán học, nếu $ X_k(f) $ là biến đổi Fourier của đoạn thứ $ k $, thì ước tính PSD của Welch được cho bởi:
+
+$$
+S_{xx}(f) = \frac{1}{K} \sum_{k=1}^{K} \left| X_k(f) \right|^2
+$$
+
+trong đó $ K $ là số đoạn. Cách tiếp cận này cung cấp một ước tính PSD mượt mà hơn so với ước tính periodogram trực tiếp, cải thiện sự ổn định và giảm nhiễu trong phân tích tần số EEG.
+
+| Dải Công suất | Dải Tần số (Hz) | Mô tả |
+|:------------|:-----------------:|:------------|
+| **Delta (δ)** | 0.5 – 4 Hz | Liên quan đến giấc ngủ sâu và các quá trình phục hồi. Sóng delta cao bất thường khi thức có thể chỉ ra tổn thương não hoặc động kinh. |
+| **Theta (θ)** | 4 – 7 Hz | Liên quan đến trạng thái buồn ngủ, ngủ nông và xử lý bộ nhớ. Hoạt động theta tăng có thể xảy ra trước khi cơn co giật bắt đầu ở bệnh nhân động kinh. |
+| **Alpha (α)** | 8 – 12 Hz | Tìm thấy trong trạng thái tỉnh táo thư giãn, đặc biệt là khi nhắm mắt. Sự triệt tiêu alpha được quan sát thấy trong các cơn co giật và sự tham gia nhận thức. |
+| **Beta (β)** | 13 – 30 Hz | Liên quan đến suy nghĩ tích cực, giải quyết vấn đề và sự tỉnh táo. Các đợt bùng phát bất thường của sóng beta có thể thấy trong bệnh động kinh cục bộ. |
+| **Gamma (γ)** | 30 – 100 Hz | Liên quan đến các chức năng nhận thức cấp cao và xử lý cảm giác. Hoạt động gamma tăng đôi khi được quan sát thấy trong các đợt co giật. |
+
+```{r freq-features-function}
+# Hàm trích xuất đặc trưng miền tần số
+extract_frequency_domain_features <- function(signal, fs = 178) {
+  # Tính toán phổ trung bình (tương tự phương pháp Welch) bằng hàm meanspec
+  # wl = độ dài cửa sổ, bằng độ dài tín hiệu để không chia đoạn
+  # `meanspec` trả về một ma trận với cột 1 là tần số (kHz) và cột 2 là biên độ
+  mean_spec_res <- seewave::meanspec(signal, f = fs, wl = length(signal), plot = FALSE)
+  
+  freqs <- mean_spec_res[, 1] * 1000 # Chuyển từ kHz sang Hz
+  psd <- mean_spec_res[, 2]
+  
+  # Hàm phụ để tính công suất dải tần
+  bandpower <- function(psd, freqs, fmin, fmax) {
+    idx <- freqs >= fmin & freqs <= fmax
+    # Tích hợp bằng quy tắc hình thang (trapezoidal rule) từ package pracma
+    power <- pracma::trapz(freqs[idx], psd[idx])
+    return(power)
+  }
+  
+  # Xác định các dải tần EEG điển hình (Hz)
+  delta_power <- bandpower(psd, freqs, 0.5, 4)
+  theta_power <- bandpower(psd, freqs, 4, 8)
+  alpha_power <- bandpower(psd, freqs, 8, 13)
+  beta_power <- bandpower(psd, freqs, 13, 30)
+  gamma_power <- bandpower(psd, freqs, 30, fs / 2)
+  
+  tibble(
+    delta_power = delta_power, theta_power = theta_power,
+    alpha_power = alpha_power, beta_power = beta_power,
+    gamma_power = gamma_power
+  )
+}
+```
+
+```{r}
+# Lấy lại signal_sample nếu cần
+set.seed(42)
+signal_sample <- X_original %>% dplyr::sample_n(1) %>% as.numeric()
+fs <- 178 # Tần số lấy mẫu
+
+# Vẽ Phổ Công suất
+# Sử dụng hàm meanspec từ package seewave để tính phổ
+# wl = độ dài cửa sổ, ở đây bằng độ dài tín hiệu
+mean_spec_res <- seewave::meanspec(signal_sample, f = fs, wl = length(signal_sample), plot = FALSE)
+
+# Chuyển kết quả thành tibble để vẽ bằng ggplot
+spectrum_df <- tibble(
+  frequency = mean_spec_res[, 1] * 1000, # Chuyển từ kHz sang Hz
+  amplitude = mean_spec_res[, 2]
+)
+
+# Tạo data frame để tô màu các dải tần EEG
+eeg_bands <- tibble(
+  band = factor(c("Delta", "Theta", "Alpha", "Beta", "Gamma"), levels = c("Delta", "Theta", "Alpha", "Beta", "Gamma")),
+  fmin = c(0.5, 4, 8, 13, 30),
+  fmax = c(4, 8, 13, 30, fs / 2)
+)
+
+# Vẽ biểu đồ
+ggplot(spectrum_df, aes(x = frequency, y = amplitude)) +
+  # Thêm các vùng chữ nhật để tô màu cho dải tần
+  geom_rect(data = eeg_bands, aes(xmin = fmin, xmax = fmax, ymin = -Inf, ymax = Inf, fill = band), 
+            alpha = 0.3, inherit.aes = FALSE) +
+  # Vẽ đường phổ
+  geom_line(color = "black") +
+  # Giới hạn trục x để nhìn rõ hơn
+  coord_cartesian(xlim = c(0, 50)) +
+  scale_fill_brewer(palette = "Set1") +
+  labs(
+    title = "Phổ Công suất của Tín hiệu Mẫu",
+    subtitle = "Hiển thị năng lượng tín hiệu trên các dải tần khác nhau",
+    x = "Tần số (Hz)",
+    y = "Biên độ Phổ (Amplitude)"
+  ) +
+  theme_minimal()
+```
+
+## 3.3. Đặc trưng Wavelet và Phi tuyến tính
+
+Biến đổi Wavelet (WT) đặc biệt hữu ích để phân tích tín hiệu EEG vì nó phân rã tín hiệu thành các thành phần tần số khác nhau trong khi vẫn duy trì độ phân giải thời gian. Biến đổi Wavelet Rời rạc (DWT) phân rã tín hiệu thành các mức chi tiết khác nhau:
+- **Thành phần tần số thấp (hệ số xấp xỉ)** nắm bắt các xu hướng dài hạn.
+- **Thành phần tần số cao (hệ số chi tiết)** phát hiện các mẫu tạm thời, tồn tại trong thời gian ngắn như các đỉnh nhọn động kinh.
+
+Trong hàm sau, chúng ta áp dụng DWT sử dụng wavelet Daubechies-4 ("db4"), thường được sử dụng trong phân tích EEG. Năng lượng ở mỗi mức wavelet được trích xuất làm đặc trưng.
+
+Chúng ta cũng thêm **Approximate Entropy (ApEn)** làm một thước đo phi tuyến tính để định lượng sự khó đoán và độ phức tạp của một chuỗi thời gian. Nó giúp phân biệt giữa các mẫu EEG đều đặn và bất thường, điều này đặc biệt hữu ích để phát hiện các cơn động kinh. Về mặt toán học, ApEn được tính như sau:
+
+$$
+ApEn(m, r) = \phi(m) - \phi(m+1)
+$$
+trong đó:
+- $ m $ là chiều nhúng (độ dài của các chuỗi được so sánh).
+- $ r $ là một ngưỡng dựa trên độ lệch chuẩn của tín hiệu.
+- $ \phi(m) $ đại diện cho **tổng tương quan dựa trên khoảng cách Chebyshev**.
+
+Một giá trị **ApEn cao hơn** cho thấy tín hiệu bất thường hơn, trong khi một giá trị **ApEn thấp hơn** cho thấy tín hiệu dễ dự đoán hơn (ví dụ: các mẫu giấc ngủ sâu hoặc co giật).
+
+```{r wavelet-features-function}
+extract_wavelet_nonlinear_features <- function(signal) {
+
+  # Đảm bảo độ dài tín hiệu là lũy thừa của 2
+  if (log2(length(signal)) %% 1 != 0) {
+      new_len <- 2^floor(log2(length(signal)))
+      signal_for_dwt <- signal[1:new_len]
+  } else {
+      signal_for_dwt <- signal
+  }
+  
+  dwt_res <- wavelets::dwt(signal_for_dwt, filter = "d4", n.levels = 4)
+  wavelet_coeffs <- c(dwt_res@W, list(dwt_res@V[[4]]))
+  level_names <- paste0("level_", 1:length(wavelet_coeffs))
+  
+  # Tạo một danh sách rỗng để lưu trữ tất cả các đặc trưng
+  all_features <- list()
+
+  # Lặp qua từng mức hệ số để trích xuất nhiều đặc trưng
+  for (i in 1:length(wavelet_coeffs)) {
+    coeffs <- wavelet_coeffs[[i]]
+    level_name <- level_names[i]
+    
+    # Tính toán các đặc trưng thống kê
+    all_features[[paste0(level_name, "_energy")]] <- sum(coeffs^2)
+    all_features[[paste0(level_name, "_std")]] <- sd(coeffs)
+    all_features[[paste0(level_name, "_skew")]] <- moments::skewness(coeffs)
+    all_features[[paste0(level_name, "_kurt")]] <- moments::kurtosis(coeffs)
+  }
+  
+  # Trả về dưới dạng tibble một hàng
+  return(as_tibble(all_features))
+}
+```
+
+```{r}
+# Trích xuất các đặc trưng wavelet từ signal_sample
+wavelet_features <- extract_wavelet_nonlinear_features(signal_sample)
+
+# Chuyển dữ liệu từ dạng rộng sang dạng dài để vẽ biểu đồ cột
+wavelet_energy_df <- wavelet_features %>%
+  # Chỉ chọn các cột năng lượng
+  dplyr::select(ends_with("_energy")) %>%
+  # Chuyển sang dạng dài
+  pivot_longer(
+    cols = everything(),
+    names_to = "level",
+    values_to = "energy"
+  ) %>%
+  # Sắp xếp lại tên cho đẹp
+  mutate(level = sub("_energy", "", level) %>% sub("_", " ", .))
+
+# Vẽ biểu đồ cột
+ggplot(wavelet_energy_df, aes(x = level, y = energy, fill = level)) +
+  geom_col(show.legend = FALSE) +
+  geom_text(aes(label = round(energy, 2)), vjust = -0.5) +
+  labs(
+    title = "Phân bố Năng lượng Tín hiệu trên các Mức Wavelet",
+    x = "Mức Phân rã Wavelet",
+    y = "Năng lượng (Tổng bình phương các hệ số)"
+  ) +
+  theme_minimal()
+```
+
+---
+
+Tính toán các đặc trưng
+```{r apply-feature-engineering-and-clean}
+# Áp dụng các hàm trích xuất đặc trưng
+features_df_time <- purrr::map_dfr(1:nrow(X_original), ~extract_time_domain_features(as.numeric(X_original[.x, ])))
+features_df_freq <- purrr::map_dfr(1:nrow(X_original), ~extract_frequency_domain_features(as.numeric(X_original[.x, ])))
+features_df_wavelet <- purrr::map_dfr(1:nrow(X_original), ~extract_wavelet_nonlinear_features(as.numeric(X_original[.x, ])))
+
+# Kết hợp tất cả các đặc trưng lại
+features_df <- bind_cols(features_df_time, features_df_freq, features_df_wavelet)
+
+# Hiện thị dữ liệu sau khi trích xuất
+knitr::kable(head(features_df))
+```

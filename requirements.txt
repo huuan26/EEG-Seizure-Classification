@@ -1,0 +1,36 @@
+# --- Xử lý dữ liệu và Hệ sinh thái Tidy ---
+tidyverse      # Bao gồm ggplot2, dplyr, readr, purrr, v.v.
+patchwork      # Sắp xếp các biểu đồ ggplot
+scales         # Định dạng tỷ lệ và đơn vị trên biểu đồ
+
+# --- Phân tích tín hiệu và Đặc trưng EEG ---
+seewave        # Phân tích phổ tần số (PSD)
+wavelets       # Biến đổi Wavelet rời rạc (DWT)
+pracma         # Tích phân hình thang (trapz) cho công suất dải tần
+moments        # Tính toán Skewness và Kurtosis
+TSEntropies    # Tính toán các chỉ số Entropy
+
+# --- Thống kê và Kiểm định Đa biến ---
+psych          # Kiểm định KMO, Bartlett và Phân tích nhân tố (FA)
+factoextra     # Trực quan hóa PCA và phân cụm
+biotools       # Kiểm định Box's M cho ma trận hiệp phương sai
+MVN            # Kiểm định phân phối chuẩn đa biến (Henze-Zirkler)
+mvnormtest     # Các kiểm định chuẩn đa biến bổ trợ
+
+# --- Học máy và Dự báo ---
+caret          # Framework huấn luyện và đánh giá mô hình
+recipes        # Xây dựng Pipeline tiền xử lý dữ liệu
+themis         # Xử lý mất cân bằng dữ liệu (SMOTE)
+randomForest   # Thuật toán Rừng ngẫu nhiên
+e1071          # Thuật toán Support Vector Machine (SVM)
+MASS           # Thuật toán Linear Discriminant Analysis (LDA)
+pROC           # Phân tích đường cong ROC và chỉ số AUC
+
+# --- Giảm chiều phi tuyến ---
+Rtsne          # Thuật toán t-SNE
+uwot           # Thuật toán UMAP
+
+# --- Báo cáo ---
+knitr          # Tạo báo cáo động RMarkdown
+rmarkdown      # Chuyển đổi file .Rmd sang HTML/PDF
+tidytext       # Hỗ trợ sắp xếp dữ liệu text/factor trong biểu đồ

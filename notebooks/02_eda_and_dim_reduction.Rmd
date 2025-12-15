@@ -1,0 +1,591 @@
+---
+title: "Phân tích Khám phá và Giảm chiều\n"
+author: "22110012 - Hữu Ân  \n\n 22110059 - Hồng Hiên\n"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: yes
+    toc_depth: 3
+    toc_float: true
+    number_sections: false
+    theme: united
+    highlight: tango
+    mathjax: default
+  pdata_document:
+    toc: true
+    toc_depth: '3'
+---
+
+```{r setup, include=FALSE}
+# --- Thiết lập chung ---
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.align = 'center')
+
+# --- Tải các thư viện cần thiết cho phân tích đa biến và giảm chiều ---
+library(tidyverse)    # Xử lý dữ liệu và vẽ biểu đồ
+library(caret)        # Tiền xử lý dữ liệu (nearZeroVar, preProcess)
+library(factoextra)   # Trực quan hóa kết quả PCA
+library(psych)        # Kiểm định KMO, Bartlett, Phân tích nhân tố (FA)
+library(biotools)     # Kiểm định Box's M
+library(MVN)          # Kiểm định phân phối chuẩn đa biến
+library(Rtsne)        # Giảm chiều phi tuyến t-SNE
+library(uwot)         # Giảm chiều phi tuyến UMAP
+library(patchwork)    # Sắp xếp biểu đồ
+library(scales)       # Định dạng tỷ lệ phần trăm
+```
+
+# IV. Phân tích Thống kê Nhiều chiều
+
+Chúng ta sẽ khám phá bộ đặc trưng mới tạo ra bằng các phương pháp thống kê đa biến.
+
+```{r}
+# --- IV. Phân tích Thống kê Nhiều chiều ---
+
+# 1. Đọc dữ liệu
+train_data <- readr::read_csv("EEG_Features_Extracted.csv")
+
+# 2. Tách X và y (Sử dụng dplyr:: để tránh xung đột)
+X_features <- train_data %>% dplyr::select(-target)
+y_labels_factor <- as.factor(train_data$target)
+
+# 3. Kiểm tra kích thước dữ liệu
+# Dự kiến: 11500 hàng và 39 cột đặc trưng
+dim(X_features)
+```
+
+```{r prepare-for-analysis}
+# Xác định các cột có phương sai gần bằng không (near-zero variance).
+nzv_cols_indices <- nearZeroVar(X_features)
+
+# In ra các cột bị loại bỏ (nếu có) để kiểm tra
+if(length(nzv_cols_indices) > 0) {
+  print("Loại bỏ các cột có phương sai gần bằng không:")
+  print(names(X_features)[nzv_cols_indices])
+  
+  # Loại bỏ các cột này khỏi bộ dữ liệu
+  X_features_filtered <- X_features[, -nzv_cols_indices]
+} else {
+  X_features_filtered <- X_features
+}
+
+# Chuẩn hóa trên bộ dữ liệu đã được lọc sạch
+scaler <- preProcess(X_features_filtered, method = c("center", "scale"))
+X_features_scaled <- predict(scaler, X_features_filtered)
+
+# Kiểm tra
+print(paste("Số giá trị không hữu hạn còn lại:", sum(!is.finite(as.matrix(X_features_scaled)))))
+```
+
+## 4.1. Phân tích Thành phần chính (PCA)
+
+PCA giúp giảm chiều dữ liệu trong khi vẫn giữ lại phần lớn thông tin (phương sai).
+
+```{r pca-analysis}
+pca_obj <- prcomp(X_features_scaled, scale. = TRUE)
+```
+
+```{r plot}
+# Lấy phương sai giải thích từ đối tượng PCA
+explained_variance <- pca_obj$sdev^2 / sum(pca_obj$sdev^2)
+cumulative_variance <- cumsum(explained_variance)
+
+# Tạo dataframe để vẽ
+plot_data <- tibble(
+  component = 1:length(explained_variance),
+  explained_variance = explained_variance,
+  cumulative_variance = cumulative_variance
+)
+
+# Vẽ biểu đồ gộp
+ggplot(plot_data, aes(x = component)) +
+  # Vẽ các cột cho phương sai riêng lẻ
+  geom_col(aes(y = explained_variance), fill = "steelblue", alpha = 0.8) +
+  
+  # Vẽ đường "khuỷu tay" nối các đỉnh cột
+  geom_line(aes(y = explained_variance), color = "black", size = 0.8) +
+  geom_point(aes(y = explained_variance), color = "black", size = 2) +
+  
+  # Vẽ đường tích lũy
+  geom_line(aes(y = cumulative_variance), color = "red", size = 1) +
+  geom_point(aes(y = cumulative_variance), color = "red", size = 2) +
+  
+  # Thêm nhãn % cho 10 thành phần đầu tiên
+  geom_text(
+    data = . %>% filter(component <= 10),
+    # SỬA LỖI Ở ĐÂY: Thêm "scales::" vào trước hàm percent
+    aes(y = explained_variance, label = scales::percent(explained_variance, accuracy = 0.1)),
+    vjust = -0.8, # Đẩy chữ lên trên điểm
+    size = 3.5,
+    color = "black"
+  ) +
+  
+  # Thêm các đường tham chiếu và chú thích
+  geom_hline(yintercept = 0.9, linetype = "dashed", color = "blue", alpha = 0.7) +
+  geom_hline(yintercept = 0.95, linetype = "dashed", color = "darkgreen", alpha = 0.7) +
+  annotate("text", x = max(plot_data$component) * 0.7, y = 0.9, label = "90% phương sai", vjust = -0.5, color="blue") +
+  annotate("text", x = max(plot_data$component) * 0.7, y = 0.95, label = "95% phương sai", vjust = -0.5, color="darkgreen") +
+  
+  # Tinh chỉnh các trục và tiêu đề
+  scale_x_continuous(breaks = 1:length(explained_variance)) +
+  scale_y_continuous(
+    name = "Tỷ lệ Phương sai Giải thích",
+    labels = scales::percent # Dòng này của bạn đã viết đúng
+  ) +
+  labs(
+    title = "Biểu đồ Scree Plot kết hợp của PCA",
+    subtitle = "Hiển thị phương sai riêng lẻ (cột, đường đen) và phương sai tích lũy (đường đỏ)",
+    x = "Thành phần Chính",
+    y = "Tỷ lệ Phương sai Giải thích"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size=16, face="bold"),
+    plot.subtitle = element_text(size=12)
+  )
+```
+
+**Nhận xét:**
+
+Biểu đồ Scree Plot cung cấp hai cách tiếp cận phổ biến để xác định số lượng thành phần chính (PC) cần giữ lại:
+
+1. **Phương pháp Điểm khuỷu tay (Elbow Method):**
+   Phương pháp này dựa vào việc xác định điểm "gãy" trên đường biểu diễn phương sai riêng phần – nơi mức giảm phương sai bắt đầu chậm lại. Trong biểu đồ này, khuỷu tay có thể được nhận thấy rõ tại PC3 hoặc PC4, cho thấy sau ngưỡng này, các thành phần đóng góp thêm không đáng kể vào tổng phương sai.
+
+2. **Phương pháp Tỷ lệ Phương sai Tích lũy:**
+   Dựa trên đường cong tích lũy (thường biểu diễn bằng màu đỏ), ta có thể xác định số lượng PC cần thiết để giữ lại một tỷ lệ phương sai mong muốn:
+
+   * Để giữ lại khoảng **90%** phương sai: cần **9 PCs**.
+   * Để giữ lại khoảng **95%** phương sai: cần **12 PCs**.
+
+**Kết luận:**
+
+* **Đối với giải phương sai**, phương pháp **Điểm khuỷu tay** (Elbow Method) cho thấy có thể giữ lại khoảng **3–4 PCs** là hợp lý. Đây là lựa chọn phù hợp để diễn giải dữ liệu.
+
+* **Đối với huấn luyện mô hình**, phương pháp **Tỷ lệ phương sai tích lũy** cho thấy cần giữ lại khoảng **9–11 PCs** để bảo toàn **90–95%** tổng phương sai. Việc này giúp mô hình học máy có đủ thông tin để hoạt động hiệu quả, đồng thời giảm nhiễu và chi phí tính toán so với việc dùng toàn bộ biến ban đầu và đảm bảo mang đủ ý nghĩ thực tế.
+
+```{r}
+library(factoextra)
+
+# PCA Scatter Plot (PC1 vs PC2)
+fviz_pca_ind(pca_obj,
+             geom.ind = "point",
+             col.ind = y_labels_factor,
+             palette = c("#00AFBB", "#E7B800"),
+             addEllipses = TRUE,
+             legend.title = "Lớp") +
+  labs(title="Trực quan hóa PCA")
+```
+*Nhận xét:* 
+Biểu đồ phân tán PCA cho thấy có sự phân tách tương đối rõ rệt giữa hai lớp (0 và 1) trên mặt phẳng tạo bởi hai thành phần chính đầu tiên. Hai thành phần này giải thích được tổng cộng 56.7% phương sai của dữ liệu (gồm 39.7% từ thành phần 1 và 17% từ thành phần 2). Sự phân tách chủ yếu diễn ra theo trục chính thứ nhất (Dim1), cho thấy các đặc trưng sau khi giảm chiều có khả năng hỗ trợ phân biệt hai trạng thái.
+
+Tuy nhiên, vẫn tồn tại một số điểm chồng lấn giữa hai lớp, đặc biệt là các điểm thuộc lớp 0 phân bố rải rác trong vùng của lớp 1. Điều này cho thấy biên phân tách giữa hai lớp không hoàn toàn tuyến tính. Do đó, các kỹ thuật giảm chiều phi tuyến như t-SNE hoặc UMAP sẽ được sử dụng bổ sung nhằm khảo sát rõ hơn cấu trúc phân lớp trong không gian đặc trưng phi tuyến.
+
+```{r}
+eigenvalues <- pca_obj$sdev^2
+variance_percent <- eigenvalues / sum(eigenvalues) * 100
+
+data.frame(
+  PC = paste0("PC", 1:length(eigenvalues)),
+  Eigenvalue = round(eigenvalues, 2),
+  Variance_Percent = round(variance_percent, 2),
+  Cumulative_Percent = round(cumsum(variance_percent), 2)
+)
+```
+Sử dụng tiêu chí Kaiser
+```{r}
+eigenvalues <- pca_obj$sdev^2
+selected_pcs <- sum(eigenvalues > 1)
+selected_pcs
+```
+
+```{r}
+# Lấy tải trọng (loadings) của 4 PC đầu tiên và chuyển sang dạng tidy
+loadings_long <- as.data.frame(pca_obj$rotation[, 1:4]) %>%
+  mutate(feature = rownames(.)) %>%
+  # Chuyển từ dạng rộng sang dạng dài
+  tidyr::pivot_longer(
+    cols = c(PC1, PC2, PC3, PC4),
+    names_to = "pc",
+    values_to = "loading"
+  )
+
+# Lặp qua từng PC để vẽ và in ra biểu đồ riêng biệt
+pc_names <- unique(loadings_long$pc)
+
+for (pc_name in pc_names) {
+  
+  # Lọc dữ liệu chỉ cho PC hiện tại
+  plot_data <- loadings_long %>%
+    filter(pc == pc_name)
+  
+  # Tạo biểu đồ cho PC hiện tại
+  p <- ggplot(plot_data, aes(y = loading, 
+                             x = reorder(feature, loading), 
+                             fill = loading > 0)) + # Tô màu khác nhau cho giá trị âm/dương
+    geom_col(show.legend = FALSE) +
+    coord_flip() + # Lật trục để dễ đọc tên đặc trưng
+    labs(
+      title = paste("Phân tích Tải trọng (Loadings) cho", pc_name), # Tiêu đề động
+      x = "Đặc trưng (Feature)",
+      y = "Giá trị Tải trọng (Loading)"
+    ) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(size = 16, face = "bold")
+    )
+  
+  # In biểu đồ ra output
+  print(p)
+}
+```
+**Diễn giải các thành phần chính**
+
+**PC1 - Độ lớn và sự Biến động chung của Tín hiệu**
+
+Thành phần chính 1 (PC1) nắm bắt sự biến thiên tổng thể về biên độ và năng lượng của tín hiệu EEG. Nó có mối tương quan chặt chẽ với các đặc trưng đo lường độ lớn và năng lượng tín hiệu như `abs_max` (giá trị tuyệt đối lớn nhất), `std` (độ lệch chuẩn), `rms` (giá trị hiệu dụng), và `var` (phương sai). Đồng thời, tất cả các mức năng lượng wavelet (`wavelet_energy_level_1` đến `5`) đều có tải trọng dương cao, khẳng định vai trò của PC1 trong việc đo lường năng lượng trên toàn bộ phổ tần số. Nhìn chung, PC1 giúp phân biệt giữa các tín hiệu có năng lượng cao, dao động mạnh (điển hình của cơn co giật) và các tín hiệu có biên độ thấp, ổn định hơn.
+
+* **Tải trọng dương cao:** `abs_max`, `std`, `rms`, `var`, tất cả các `wavelet_energy_level` -> Tín hiệu có năng lượng và biên độ dao động lớn.
+* **Tải trọng âm cao:** `min`, `skew` -> Tín hiệu có giá trị âm sâu, phân bố lệch.
+
+---
+
+**PC2 - Sự đối lập giữa Năng lượng Thô và Đặc tính Phổ**
+
+PC2 thể hiện một sự tương phản phức tạp hơn. Nó dường như tách biệt các tín hiệu có năng lượng thô cao (như `rms`, `var`) khỏi các tín hiệu có đặc tính rõ ràng về hình dạng và phổ tần số. Cụ thể, PC2 có tải trọng dương với các chỉ số năng lượng cơ bản nhưng lại có tải trọng âm với hầu hết các chỉ số quan trọng khác như `crest_factor`, `margin_factor` (các yếu tố đỉnh), và toàn bộ các dải công suất (`delta`, `theta`, `alpha`, `beta`, `gamma`). Điều này cho thấy PC2 có thể đang phân biệt các loại dao động khác nhau mà không chỉ đơn thuần dựa trên năng lượng.
+
+* **Tải trọng dương cao:** `wavelet_energy_level_4`, `rms`, `var` -> Năng lượng tín hiệu thô cao.
+* **Tải trọng âm cao:** `crest_factor`, `impulse_factor`, tất cả các `power_band` -> Tín hiệu có đỉnh nhọn và năng lượng phổ cụ thể.
+
+---
+
+**PC3 - Độ phức tạp và Hoạt động Tần số cao**
+
+PC3 làm nổi bật sự khác biệt giữa các trạng thái nhận thức. Nó có tương quan dương mạnh với các đặc trưng thể hiện sự phức tạp và hoạt động nhanh, bao gồm `approx_entropy` (độ phức tạp/khó đoán của tín hiệu), `zero_crossings` (số lần qua trục zero), và năng lượng ở các dải tần số cao (`gamma_power`, `beta_power`, `alpha_power`). Ngược lại, nó có tương quan âm với `kurtosis` (độ nhọn) và các yếu tố đỉnh. Điều này cho thấy PC3 giúp phân biệt giữa các trạng thái não bộ tích cực, tỉnh táo (tần số cao, phức tạp) và các trạng thái nghỉ ngơi hoặc có đỉnh sóng bất thường.
+
+* **Tải trọng dương cao:** `approx_entropy`, `gamma_power`, `beta_power`, `zero_crossings` -> Trạng thái não hoạt động, tín hiệu phức tạp.
+* **Tải trọng âm cao:** `kurtosis`, `crest_factor`, `impulse_factor` -> Tín hiệu có các đỉnh sóng cao và nhọn.
+
+---
+
+**PC4 - Đặc tính Đỉnh nhọn và Tần số Trung-Thấp**
+
+Thành phần chính 4 dường như tập trung vào hình dạng của các đỉnh sóng và mối quan hệ của chúng với các tần số trung bình và thấp. Nó có tải trọng dương cao với `kurtosis` và các năng lượng wavelet ở độ phân giải cao (`wavelet_energy_level_1`, `wavelet_energy_level_2`). Trong khi đó, nó có tải trọng âm mạnh với các dải tần số thấp và trung bình (`delta_power`, `theta_power`, `alpha_power`) cũng như độ xiên (`skew`) của tín hiệu. PC4 có thể giúp phân biệt các tín hiệu có các đỉnh sóng nhọn, đột ngột khỏi các tín hiệu có dao động mượt mà hơn ở tần số thấp.
+
+* **Tải trọng dương cao:** `margin_factor`, `kurtosis`, `approx_entropy` -> Tín hiệu có đỉnh nhọn, phức tạp.
+* **Tải trọng âm cao:** `skew`, `delta_power`, `theta_power`, `alpha_power` -> Tín hiệu lệch, tập trung ở tần số thấp và trung bình.
+
+---
+
+## 4.2. Phân tích Nhân tố (Factor Analysis - FA)
+
+FA giúp tìm ra các "nhân tố" tiềm ẩn (các biến không quan sát được) cấu thành nên các đặc trưng quan sát được của chúng ta.
+
+```{r factor-analysis}
+# Kiểm định KMO
+cat("--- Kết quả Kiểm định KMO ---\n")
+kmo_result <- KMO(X_features_scaled)
+print(kmo_result)
+
+# Kiểm định Bartlett
+cat("\n--- Kết quả Kiểm định Bartlett ---\n")
+bartlett_result <- cortest.bartlett(X_features_scaled)
+print(bartlett_result)
+```
+
+*Nhận xét:* Kết quả từ cả hai kiểm định đều khẳng định tính phù hợp của dữ liệu cho Phân tích Nhân tố. Chỉ số KMO tổng thể (Overall MSA) đạt 0.82, được xem là mức "tốt" (meritorious), cho thấy các biến có đủ phương sai chung để có thể nhóm lại thành các nhân tố. Đồng thời, kiểm định Bartlett có ý nghĩa thống kê rất cao (p-value = 0), cho phép chúng ta bác bỏ giả thuyết rằng các biến không tương quan với nhau. Tóm lại, dữ liệu đã vượt qua các kiểm định điều kiện và hoàn toàn sẵn sàng cho bước phân tích nhân tố tiếp theo.
+
+```{r Parallel Analysis}
+library(psych)
+
+# Parallel Analysis (bạn đã làm)
+fa.parallel(X_features_scaled, fa="fa")
+
+# Velicer's MAP
+VSS(X_features_scaled)  # chọn số yếu tố theo độ phù hợp mô hình
+```
+Biểu đồ Parallel Analysis (hình dưới) được sử dụng để xác định số lượng nhân tố tiềm ẩn nên giữ lại trong phân tích nhân tố. Đường màu xanh biểu diễn các trị riêng (eigenvalues) thu được từ dữ liệu thực tế, trong khi các đường màu đỏ thể hiện trị riêng trung bình từ dữ liệu mô phỏng và dữ liệu hoán vị (resampling).
+
+Kết quả cho thấy các trị riêng của dữ liệu thực cao hơn đáng kể so với dữ liệu giả lập ở **7 yếu tố đầu tiên**. Sau yếu tố thứ 7, đường màu xanh cắt và nằm dưới các đường tham chiếu đỏ, cho thấy các yếu tố tiếp theo không mang nhiều thông tin hơn nhiễu ngẫu nhiên.
+
+Do đó, có thể kết luận rằng **7 yếu tố tiềm ẩn** là hợp lý để giữ lại cho phân tích tiếp theo.
+
+```{r}
+# Thực hiện Phân tích Nhân tố với 7 nhân tố
+# rotate = "varimax" là một kỹ thuật xoay phổ biến giúp kết quả dễ diễn giải hơn
+fa_result <- fa(X_features_scaled, nfactors = 7, rotate = "varimax")
+
+# In ra ma trận tải trọng (loadings)
+# cutoff = 0.4 để ẩn đi các tải trọng nhỏ, giúp bảng kết quả gọn gàng và dễ đọc hơn
+cat("\n--- Ma trận Tải trọng của Phân tích Nhân tố ---\n")
+print(fa_result$loadings, cutoff = 0.4)
+```
+**Diễn giải các Nhân tố**
+
+**Nhân tố 1 (MR1): Năng lượng và Biên độ Tổng thể**
+
+Đây là nhân tố quan trọng nhất, giải thích tới **35.8%** phương sai. Nó có tải trọng cao trên các biến mô tả năng lượng, độ lệch, và độ lớn của tín hiệu EEG.
+
+* **Các biến ảnh hưởng lớn:** `std` (0.975), `var` (0.985), `min` (-0.920), `max` (0.879), `rms` (0.984), `abs_max` (0.944), và toàn bộ các biến `wavelet_energy_level_1→5` (từ 0.722 đến 0.811).
+* **Diễn giải:** Nhân tố này thể hiện **độ mạnh của tín hiệu**: năng lượng cao, biên độ lớn, dao động mạnh — là đặc điểm nổi bật trong các cơn co giật.
+
+---
+
+**Nhân tố 2 (MR2): Đặc tính Đỉnh và Hình dạng Sóng**
+
+Nhân tố này liên quan đến cấu trúc "đỉnh nhọn" và hình dạng tổng thể của sóng EEG.
+
+* **Các biến ảnh hưởng lớn:** `kurtosis` (0.814), `crest_factor` (0.905), `shape_factor` (0.760), `impulse_factor` (0.973).
+* **Diễn giải:** MR2 phản ánh **độ nhọn và độ sắc** của sóng EEG – những đặc trưng thường thấy trong các xung đột ngột và đỉnh tín hiệu cao.
+
+---
+
+**Nhân tố 3 (MR3): Hoạt động Tần số Cao và Mức độ Dao động**
+
+Nhân tố này mô tả hoạt động ở các dải tần alpha, beta, gamma và tần suất dao động nhanh.
+
+* **Các biến ảnh hưởng lớn:** `zero_crossings` (0.852), `alpha_power` (0.716), `beta_power` (0.830), `gamma_power` (0.757).
+* **Diễn giải:** MR3 đại diện cho tình trạng não bộ tỉnh táo, tập trung cao độ hoặc hưng phấn, đặc trưng bởi tín hiệu dao động nhanh và năng lượng mạnh ở dải tần cao.
+
+---
+
+**Nhân tố 4 (MR4): Hoạt động Tần số Thấp**
+
+Nhân tố này đại diện cho năng lượng tín hiệu ở các dải tần thấp.
+
+* **Biến ảnh hưởng lớn:** `margin_factor` (0.613).
+* **Diễn giải:**  MR4 có thể liên quan đến trạng thái thư giãn sâu hoặc giảm mức hoạt động thần kinh, thường thấy khi có ưu thế ở các dao động chậm như theta hoặc delta.
+
+---
+
+**Nhân tố 5 (MR5): Cấu trúc Mép Sóng và Đặc tính Biên**
+
+Nhân tố này ảnh hưởng bởi một số biến về hình dạng biên của sóng.
+
+* **Biến ảnh hưởng lớn:** `delta_power` (0.885).
+* **Diễn giải:** MR5 cho thấy sự hiện diện mạnh mẽ của sóng delta, đặc trưng cho trạng thái ngủ sâu, mất ý thức, hoặc có thể xuất hiện trong các cơn co giật.
+
+---
+
+**Nhân tố 6 (MR6): Độ Lệch (Skewness)**
+
+Là một nhân tố yếu, chỉ bị ảnh hưởng bởi một biến rõ rệt.
+
+* **Biến ảnh hưởng lớn:** `skew` (0.731).
+* **Diễn giải:** MR6 thể hiện **mức độ lệch trái hoặc lệch phải** trong phân bố biên độ tín hiệu.
+
+---
+
+**Nhân tố 7 (MR7): Tàn dư năng lượng Wavelet**
+
+Mặc dù một số biến wavelet đã tải lên MR1, nhưng MR7 vẫn giữ lại phần năng lượng chưa được giải thích.
+
+* **Biến ảnh hưởng lớn:** `wavelet_energy_level_1` (0.577), `wavelet_energy_level_2` (0.626), `wavelet_energy_level_3` (0.423).
+* **Diễn giải:** MR7 bổ sung cho MR1 bằng cách **bắt các dao động nhỏ hơn trong năng lượng phân giải theo wavelet**.
+
+---
+
+**Đánh giá bảng dưới:**
+
+* **SS loadings:** Tổng bình phương tải trọng (giống eigenvalue trong PCA). MR1 = 8.947 là nhân tố quan trọng nhất.
+* **Proportion Var:** MR1 chiếm 35.8%, MR2 là 13.2%, MR3 là 12.5%…
+* **Cumulative Var:** **7 nhân tố đầu giải thích 78.0% phương sai tổng**, cho thấy kết cấu dữ liệu EEG có thể được tóm lược khá hiệu quả bởi 7 thành phần tiềm ẩn.
+
+---
+
+```{r}
+library(tidytext) # Cần cho việc sắp xếp trong mỗi panel
+# Lấy ma trận tải trọng và chuyển sang dạng dài (giữ nguyên)
+loadings_matrix <- fa_result$loadings
+loadings_long <- as.data.frame(loadings_matrix[,]) %>%
+  mutate(feature = rownames(.)) %>%
+  pivot_longer(
+    cols = -feature,
+    names_to = "factor",
+    values_to = "loading"
+  )
+
+# Lặp qua từng nhân tố (factor) để vẽ và in ra biểu đồ riêng biệt
+factor_names <- unique(loadings_long$factor)
+
+for (factor_name in factor_names) {
+  
+  # Lọc dữ liệu chỉ cho nhân tố hiện tại
+  plot_data <- loadings_long %>%
+    filter(factor == factor_name)
+  
+  # Tạo biểu đồ cho nhân tố hiện tại
+  p <- ggplot(plot_data, aes(y = loading, 
+                             x = reorder(feature, loading), 
+                             fill = loading > 0)) + # Tô màu khác nhau cho giá trị âm/dương
+    geom_col(show.legend = FALSE) +
+    coord_flip() + # Lật trục để dễ đọc tên đặc trưng
+    labs(
+      title = paste("Tải trọng của các Đặc trưng trên Nhân tố", factor_name), # Tiêu đề động
+      x = "Đặc trưng (Feature)",
+      y = "Giá trị Tải trọng (Loading)"
+    ) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(size = 16, face = "bold")
+    )
+  
+  # In biểu đồ ra output
+  print(p)
+}
+```
+
+---
+
+Ta vẽ MR1 và MR2 biểu thị cho giải thích khoarngf4 49% phương sai.
+```{r}
+# Trích xuất điểm số nhân tố (Factor Scores)
+factor_scores <- as.data.frame(fa_result$scores)
+
+# Kết hợp điểm số với nhãn lớp để vẽ biểu đồ
+fa_data_for_plot <- bind_cols(factor_scores, Class = y_labels_factor)
+
+# Vẽ biểu đồ phân tán
+# Chúng ta sẽ vẽ 2 nhân tố đầu tiên: MR1 và MR2
+ggplot(fa_data_for_plot, aes(x = MR1, y = MR2, color = Class)) +
+  geom_point(alpha = 0.6) +
+  labs(
+    title = "Biểu đồ phân tán của Phân tích Nhân tố",
+    subtitle = "Hiển thị sự phân bố dữ liệu trên không gian 2 nhân tố đầu tiên",
+    x = "Nhân tố 1 (MR1): Năng lượng & Biên độ tổng thể", # Diễn giải từ file .Rmd của bạn
+    y = "Nhân tố 2 (MR2): Đặc tính Đỉnh & Hình dạng sóng" # Diễn giải từ file .Rmd của bạn
+  ) +
+  theme_minimal() +
+  scale_color_manual(values = c("0" = "#00AFBB", "1" = "#E7B800"), name = "Lớp") +
+  # Thêm đường kẻ x=0 và y=0 để làm rõ các góc phần tư
+  geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5) +
+  geom_vline(xintercept = 0, linetype = "dashed", alpha = 0.5)
+```
+**Nhận xét:**
+Biểu đồ cho thấy phần lớn các điểm dữ liệu thuộc nhãn **1** (màu vàng – biểu thị cơn động kinh) bị chồng lấn lên vùng của nhãn **0** (màu xanh – biểu thị trạng thái bình thường). Điều này cho thấy sự phân tách giữa hai lớp chưa rõ ràng trong không gian hai chiều của hai nhân tố chính đầu tiên. Do đó, việc trực quan hóa dữ liệu chỉ bằng hai nhân tố này là chưa đủ để phân biệt hiệu quả giữa các trạng thái não. 
+
+## 4.3. Phân tích Phương sai Đa biến (MANOVA)
+
+Chúng ta sẽ sử dụng MANOVA để kiểm tra xem có sự khác biệt thống kê giữa vector trung bình của các đặc trưng trong hai nhóm "co giật" và "không co giật" hay không.
+
+### 4.3.1 Kiểm định giả thuyết MANOVA
+Trức khi kiểm định MANOVA, chúng ta cần kiểm tra hai giả định quan trọng.
+
+1. *Giả định về tính đồng nhất của ma trận hiệp phương sai*
+
+Chúng ta sử dụng kiểm định Box's M để kiểm tra xem ma trận hiệp phương sai của các đặc trưng có đồng nhất giữa hai nhóm hay không.
+
+- $H_0:$ Các ma trận hiệp phương sai của các nhóm là bằng nhau
+
+- $H_a:$ Có ít nhất một ma trận hiệp phương sai là khác biệt.
+
+```{r}
+boxm_result <- boxM(data = X_features_scaled, grouping = y_labels_factor)
+print(boxm_result)
+```
+
+**Nhận xét:** Kết quả kiểm định Box’s M cho p-value rất nhỏ (p < 2.2e-16), dẫn đến bác bỏ giả thuyết \$H\_0\$. Tức là giả định về tính đồng nhất của ma trận hiệp phương sai **không được đáp ứng**. Tuy nhiên, kiểm định này **rất nhạy với cỡ mẫu lớn** (11.500 quan sát), nên dễ dẫn đến kết quả có ý nghĩa thống kê ngay cả khi khác biệt không đáng kể. Vì vậy, khi thực hiện MANOVA, chúng ta **ưu tiên sử dụng chỉ số Pillai’s Trace** – một chỉ số được chứng minh là bền vững hơn khi giả định này bị vi phạm.
+
+2. *Giả định về tính chuẩn đa biến*
+
+Với cỡ mẫu lớn, kiểm định Shapiro-Wilk không còn phù hợp do quá nhạy. Thay vào đó, chúng ta sử dụng Henze-Zirkler's test – một kiểm định thống kê bền vững hơn, phù hợp cho dữ liệu đa biến với cỡ mẫu lớn.
+
+- $H_0:$ Dữ liệu tuân theo phân phối chuẩn đa biến
+
+- $H_a:$ Dữ liệu không tuân theo phân phối chuẩn đa biến
+
+```{r}
+library(MVN)
+
+# Chạy và xem kết quả được in trực tiếp ra Console
+cat("--- Kết quả kiểm định chuẩn đa biến cho nhóm Non-Seizure (0) ---\n")
+MVN::mvn(data = X_features_scaled[y_labels_factor == "0", ])
+
+cat("\n--- Kết quả kiểm định chuẩn đa biến cho nhóm Seizure (1) ---\n")
+MVN::mvn(data = X_features_scaled[y_labels_factor == "1", ])
+```
+**Nhận xét:** Kết quả từ kiểm định Henze-Zirkler cho thấy p-value của cả hai nhóm đều rất nhỏ (p < 0.001), do đó chúng ta bác bỏ giả thuyết \$H\_0\$ và kết luận rằng dữ liệu **không tuân theo phân phối chuẩn đa biến**.
+
+### 4.3.2. Thực hiện kiểm định MANOVA
+
+Các giả thuyết thống kê cho phép kiểm định này là:
+
+* **\$H\_0\$**: Không có sự khác biệt có ý nghĩa thống kê về vector trung bình giữa hai nhóm:
+  $\mu_{\text{co\_giật}} = \mu_{\text{không\_co\_giật}}$
+
+* **\$H\_a\$**: Có ít nhất một khác biệt có ý nghĩa thống kê giữa vector trung bình hai nhóm:
+  $\mu_{\text{co\_giật}} \ne \mu_{\text{không\_co\_giật}}$
+
+```{r manova-analysis}
+# Thực hiện MANOVA
+manova_result <- manova(as.matrix(X_features_scaled) ~ y_labels_factor)
+summary(manova_result, test = "Wilks")
+```
+**Kết luận:** Mặc dù cả hai giả định chính của MANOVA đều bị vi phạm, kết quả từ chỉ số **Pillai’s Trace** vẫn cho p-value cực kỳ nhỏ (p < 2.2e-16). Điều này cho thấy **sự khác biệt có ý nghĩa thống kê rất rõ ràng** giữa hai nhóm.
+
+Phát hiện này khẳng định rằng bộ đặc trưng đã trích xuất **có khả năng phân biệt mạnh mẽ giữa nhóm co giật và không co giật**, cho thấy tiềm năng sử dụng trong phân tích hoặc mô hình phân loại sau này.
+
+# V. Phương pháp Trực quan Phi tuyến
+Sau khi khám phá dữ liệu bằng các phương pháp tuyến tính như PCA và Phân tích Nhân tố (FA), chúng ta nhận thấy rằng mặc dù có sự khác biệt giữa hai lớp, vẫn tồn tại vùng chồng lấn đáng kể. Điều này gợi ý rằng ranh giới phân tách giữa hai trạng thái "co giật" và "không co giật" có thể không đơn thuần là tuyến tính.
+
+Để có được cái nhìn rõ nét hơn về cấu trúc phân cụm trong dữ liệu, chúng ta sử dụng hai phương pháp giảm chiều phi tuyến phổ biến: **t-SNE** và **UMAP**. Cả hai đều nổi bật trong việc ánh xạ dữ liệu từ không gian nhiều chiều xuống không gian 2D, đồng thời bảo toàn cấu trúc "lân cận" giữa các điểm dữ liệu – tức là đưa các điểm tương tự nhau lại gần nhau trên biểu đồ, từ đó giúp làm nổi bật các cụm tiềm ẩn trong dữ liệu.
+
+## 5.1. Trực quan hóa bằng t-SNE và UMAP
+
+t-SNE và UMAP là các kỹ thuật mạnh mẽ để trực quan hóa dữ liệu nhiều chiều trong không gian 2D. 
+
+```{r tsne-umap-analysis}
+# Đặt seed để kết quả của t-SNE và UMAP có thể tái lập
+set.seed(42)
+
+# t-SNE trên toàn bộ dữ liệu
+cat("Đang chạy t-SNE trên toàn bộ 11,500 điểm dữ liệu...\n")
+tsne_out <- Rtsne(X_features_scaled, dims = 2, perplexity = 30, verbose = FALSE, max_iter = 500)
+df_tsne <- tibble(Dim1 = tsne_out$Y[,1], Dim2 = tsne_out$Y[,2], Class = y_labels_factor)
+p_tsne <- ggplot(df_tsne, aes(x = Dim1, y = Dim2, color = Class)) + 
+  geom_point(alpha = 0.7) + 
+  labs(title = "t-SNE trên toàn bộ dữ liệu") + 
+  theme_minimal()
+
+# UMAP trên toàn bộ dữ liệu
+cat("Đang chạy UMAP trên toàn bộ 11,500 điểm dữ liệu...\n")
+umap_out <- uwot::umap(X_features_scaled, n_neighbors = 15, min_dist = 0.1, n_components = 2)
+df_umap <- tibble(Dim1 = umap_out[,1], Dim2 = umap_out[,2], Class = y_labels_factor)
+p_umap <- ggplot(df_umap, aes(x = Dim1, y = Dim2, color = Class)) + 
+  geom_point(alpha = 0.7) + 
+  labs(title = "UMAP trên toàn bộ dữ liệu") + 
+  theme_minimal()
+
+# So sánh kết quả
+cat("Đang vẽ biểu đồ...\n")
+p_tsne + p_umap
+```
+**Nhận xét:** Cả hai biểu đồ đều thể hiện sự phân tách rõ ràng giữa hai nhóm dữ liệu. Các điểm thuộc nhóm "Seizure" và "Non-Seizure" hình thành nên hai cụm gần như riêng biệt, với rất ít điểm bị chồng lấn. Trong đó, UMAP cho thấy khả năng bảo toàn cấu trúc toàn cục tốt hơn so với t-SNE. Kết quả này củng cố giả thuyết rằng bộ đặc trưng hiện tại có **khả năng phân biệt mạnh mẽ** giữa hai trạng thái.
+
+---
+
+## 5.2. So sánh với PCA và FA
+
+Việc so sánh các phương pháp giảm chiều như PCA, FA, t-SNE và UMAP cho thấy mỗi kỹ thuật phản ánh một khía cạnh khác nhau của cấu trúc dữ liệu khi chiếu xuống không gian thấp chiều.
+
+* **PCA (Phân tích Thành phần Chính):**
+
+  * Giữ lại phần lớn phương sai của dữ liệu (56.7% trong hai thành phần đầu).
+  * Dễ nhận thấy sự khác biệt giữa hai lớp theo trục thành phần thứ nhất.
+  * Tuy nhiên, vẫn có sự chồng lấn đáng kể giữa hai lớp, do đây là phương pháp tuyến tính.
+
+* **FA (Phân tích Nhân tố):**
+
+  * Hữu ích trong việc phát hiện các cấu trúc nhân tố tiềm ẩn.
+  * Tuy nhiên, trên biểu đồ 2D, khả năng phân tách giữa các lớp không cải thiện nhiều so với PCA.
+
+* **t-SNE và UMAP:**
+
+  * Là các kỹ thuật phi tuyến, không cố gắng giữ lại phương sai toàn cục mà tập trung vào việc bảo toàn cấu trúc lân cận.
+  * Cả hai đều cho thấy sự phân cụm rõ ràng và gần như tách biệt hoàn toàn giữa hai lớp trong không gian 2D.
+
+---
+
+**Kết luận:**
+
+Kết quả từ t-SNE và UMAP cho thấy cấu trúc phân lớp trong dữ liệu **không hoàn toàn tuyến tính** – điều mà các phương pháp như PCA hay FA không thể hiện rõ. Tuy nhiên, **các đặc trưng được giữ lại qua PCA vẫn chứa đủ thông tin** để mô hình học máy có thể khai thác được ranh giới phân loại, kể cả khi nó phi tuyến.
+
+---

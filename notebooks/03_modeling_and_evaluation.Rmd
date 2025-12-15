@@ -1,0 +1,421 @@
+---
+title: "Xây dựng và Đánh giá Mô hình Phân loại\n"
+author: "22110012 - Hữu Ân  \n\n 22110059 - Hồng Hiên\n"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: yes
+    toc_depth: 3
+    toc_float: true
+    number_sections: false
+    theme: united
+    highlight: tango
+    mathjax: default
+  pdata_document:
+    toc: true
+    toc_depth: '3'
+--- 
+
+```{r setup, include=FALSE}
+# --- Thiết lập chung ---
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.align = 'center')
+
+# --- Tải các thư viện cần thiết cho phân tích đa biến và giảm chiều ---
+library(tidyverse)    # Xử lý dữ liệu và vẽ biểu đồ
+library(caret)        # Tiền xử lý dữ liệu (nearZeroVar, preProcess)
+library(factoextra)   # Trực quan hóa kết quả PCA
+library(psych)        # Kiểm định KMO, Bartlett, Phân tích nhân tố (FA)
+library(biotools)     # Kiểm định Box's M
+library(MVN)          # Kiểm định phân phối chuẩn đa biến
+library(Rtsne)        # Giảm chiều phi tuyến t-SNE
+library(uwot)         # Giảm chiều phi tuyến UMAP
+library(patchwork)    # Sắp xếp biểu đồ
+library(scales)       # Định dạng tỷ lệ phần trăm
+```
+
+```{r}
+# --- IV. Phân tích Thống kê Nhiều chiều ---
+
+# Đọc dữ liệu
+train_data <- readr::read_csv("EEG_Features_Extracted.csv")
+
+# Tách X và y (Sử dụng dplyr:: để tránh xung đột)
+X_features <- train_data %>% dplyr::select(-target)
+y_labels_factor <- as.factor(train_data$target)
+
+# Kiểm tra kích thước dữ liệu
+# Dự kiến: 11500 hàng và 39 cột đặc trưng
+dim(X_features)
+```
+
+Trong phần này, chúng ta sẽ xây dựng và so sánh hiệu năng của các mô hình học máy dự trên data với bộ đặc trưng đây dủ và đã qua xử lý pca. 
+
+## 6.1 Chuẩn bị dữ liệu huấn luyện
+
+```{r}
+# Phân chia dữ liệu và chuẩn bị
+set.seed(42)
+trainIndex <- createDataPartition(y_labels_factor, p = 0.8, list = FALSE)
+
+train_features <- X_features_filtered[trainIndex, ]
+test_features  <- X_features_filtered[-trainIndex, ]
+
+y_train <- y_labels_factor[trainIndex]
+y_test  <- y_labels_factor[-trainIndex]
+
+# Đổi tên các mức của biến mục tiêu để tương thích với caret
+levels(y_train)[levels(y_train)=="0"] <- "NonSeizure"
+levels(y_train)[levels(y_train)=="1"] <- "Seizure"
+levels(y_test)[levels(y_test)=="0"] <- "NonSeizure"
+levels(y_test)[levels(y_test)=="1"] <- "Seizure"
+
+# Tạo data frame huấn luyện hoàn chỉnh chứa cả đặc trưng và nhãn
+train_df <- train_features %>% 
+  mutate(y = y_train)
+```
+
+```{r}
+# Kiểm tra phân bố lớp trên tập huấn luyện ban đầu
+cat("--- Phân bố lớp trên tập huấn luyện ---\n")
+print(prop.table(table(y_train)))
+```
+**Nhận xét:**
+Kết quả phân tích cho thấy lớp '0' (Non-Seizure) chiếm khoảng 80% tổng số quan sát, trong khi lớp '1' (Seizure) chỉ chiếm khoảng 20%. Đây là một tình trạng **mất cân bằng dữ liệu nghiêm trọng**, có thể dẫn đến việc mô hình bị thiên lệch trong quá trình huấn luyện: dễ dự đoán chính xác lớp đa số nhưng **kém hiệu quả khi nhận diện các trường hợp Seizure – vốn là mục tiêu chính trong bối cảnh lâm sàng**.
+
+Để khắc phục vấn đề này, chúng tôi đã áp dụng kỹ thuật **SMOTE (Synthetic Minority Over-sampling Technique)** nhằm **tăng cường mẫu cho lớp thiểu số bằng cách tạo ra các điểm dữ liệu tổng hợp** từ các trường hợp hiện có. Việc này giúp cân bằng phân bố giữa hai lớp, góp phần cải thiện khả năng học của mô hình và nâng cao độ nhạy trong việc phát hiện các trường hợp co giật.
+
+---
+
+## 6.2 Huấn luyện với kiểm định chéo
+
+```{r}
+# Thiết lập control cho quá trình huấn luyện
+train_control <- trainControl(
+  method = "cv",
+  number = 10,
+  classProbs = TRUE,                 # Cần thiết để tính ROC-AUC
+  summaryFunction = twoClassSummary, # Báo cáo các chỉ số ROC, Sensitivity, Specificity
+  verboseIter = TRUE                 # Hiển thị tiến trình huấn luyện để theo dõi
+)
+```
+
+```{r}
+# Chuẩn bị để lưu trữ và so sánh các mô hình
+models_to_compare <- list()
+model_list <- list(LDA = "lda", SVM = "svmRadial", RF = "rf")
+
+# Định nghĩa recipe cho bộ đặc trưng đầy đủ
+full_recipe <- recipe(y ~ ., data = train_df) %>%
+  step_center(all_predictors()) %>%
+  step_scale(all_predictors()) %>%
+  step_smote(y, over_ratio = 1, seed = 123)
+
+# Huấn luyện các mô hình
+for (model_name in names(model_list)) {
+  set.seed(42)
+  models_to_compare[[model_name]] <- train(
+    full_recipe, 
+    data = train_df,
+    method = model_list[[model_name]],
+    trControl = train_control, 
+    metric = "ROC", 
+    tuneLength = 3
+  )
+}
+
+# So sánh kết quả từ kiểm định chéo
+algorithm_comparison <- resamples(models_to_compare)
+summary(algorithm_comparison)
+```
+
+**Phân tích Hiệu năng và Lựa chọn Mô hình**
+
+Dựa trên kết quả đánh giá 10-fold cross-validation trên dữ liệu sau PCA, ba thuật toán LDA, SVM và RF cho thấy sự khác biệt rõ ràng về hiệu năng:
+
+| Mô hình | ROC (TB)   | Sensitivity | Specificity |
+| ------- | ---------- | ----------- | ----------- |
+| LDA     | 0.9923     | 0.9792      | 0.9359      |
+| **SVM** | **0.9980** | **0.9883**  | 0.9679      |
+| RF      | 0.9976     | 0.9845      | **0.9723**  |
+
+**Nhận xét chính**
+
+* **SVM** có **ROC và Sensitivity cao nhất**, cho thấy khả năng phân loại tốt và đặc biệt hiệu quả trong việc **phát hiện đúng các ca bệnh thực sự** (giảm nguy cơ bỏ sót bệnh nhân – False Negative).
+
+* **RF** đạt **Specificity cao nhất**, tức mô hình này **giỏi hơn trong việc loại trừ các ca không mắc bệnh**, giúp giảm báo động giả (False Positive), dù ROC và Sensitivity kém hơn SVM một chút.
+
+* **LDA** có hiệu năng thấp hơn rõ ở cả ba chỉ số, nên không phù hợp cho ứng dụng lâm sàng.
+
+---
+
+Để có cái nhìn trực quan hơn về sự khác biệt và độ ổn định của các mô hình, chúng ta có thể vẽ biểu đồ `dénityplot` và `dotplot` so sánh chỉ số ROC-AUC thu được.
+
+```{r}
+densityplot(algorithm_comparison, metric = "ROC", auto.key = TRUE,
+            main = "Phân bố hiệu năng các thuật toán")
+```
+**Nhận xét:**
+
+* **SVM (xanh lá):** Phân bố hẹp, đỉnh cao, tập trung quanh 0.998–0.999 → hiệu năng cao và ổn định nhất.
+* **RF (vàng):** Phân bố khá tập trung, lệch nhẹ về trái so với SVM → hiệu năng tốt, độ ổn định kém hơn SVM.
+* **LDA (xanh dương):** Phân bố rộng, thấp hơn rõ → hiệu năng thấp và không ổn định.
+
+---
+
+Biểu đồ hiển thị giá trị ROC trung bình kèm khoảng tin cậy 95% cho từng thuật toán.
+```{r}
+dotplot(algorithm_comparison, metric = "ROC", main = "So sánh hiệu năng trung bình các thuật toán")
+```
+
+**Nhận xét:**
+
+* **SVM:** ROC trung bình cao nhất, khoảng tin cậy hẹp và gần như không chồng lấn với LDA, phần lớn tách biệt với RF → cho thấy khác biệt có ý nghĩa thống kê.
+* **RF:** ROC trung bình khá cao, sát với SVM nhưng khoảng tin cậy rộng hơn → hiệu năng tốt nhưng biến động lớn hơn.
+* **LDA:** ROC trung bình thấp nhất, khoảng tin cậy dài và không giao với hai thuật toán còn lại → hiệu năng kém rõ rệt.
+
+---
+
+**Kết luận:** Từ các kết quả trên, SVM là mô hình có hiệu năng ổn định và vượt trội nhất, nên ta sẽ chọn SVM để đánh giá trên dữ liệu đã qua PCA.
+
+## 6.3 Huấn luyện trên dữ liệu đã qua PCA
+Sau khi xác định SVM là mô hình tốt nhất trên bộ đặc trưng đầy đủ, chúng ta sẽ kiểm tra xem việc giảm chiều bằng PCA có phải là một sự đánh đổi hiệu quả hay không. Chúng ta sẽ so sánh hiệu năng của mô hình SVM trên bộ đặc trưng đầy đủ so với các phiên bản SVM được huấn luyện trên dữ liệu đã giảm chiều.
+```{r}
+# Lấy mô hình SVM đã được huấn luyện trên dữ liệu đầy đủ
+svm_full_model <- models_to_compare[["SVM"]]
+
+# Chuẩn bị danh sách để so sánh SVM_Full và các phiên bản SVM_PCA
+pca_comparison_list <- list(SVM_Full = svm_full_model)
+
+# Vòng lặp qua các kịch bản PCA
+for (n_components in c(12, 9, 4)) {
+  # Cập nhật thông báo
+  cat(paste("\n--- Đang huấn luyện SVM với", n_components, "thành phần chính... ---\n"))
+  
+  # Tạo recipe với bước PCA (giữ nguyên)
+  pca_recipe <- recipe(y ~ ., data = train_df) %>%
+    step_center(all_predictors()) %>%
+    step_scale(all_predictors()) %>%
+    step_pca(all_predictors(), num_comp = n_components) %>%
+    step_smote(y, over_ratio = 1, seed = 123)
+  
+  set.seed(42)
+  # Huấn luyện chỉ mô hình SVM
+  pca_comparison_list[[paste0("SVM_", n_components, "PCA")]] <- train(
+    pca_recipe, 
+    data = train_df,
+    method = "svmRadial", # <-- THAY ĐỔI 1: Đổi phương thức thành "svmRadial"
+    trControl = train_control,
+    metric = "ROC",
+    # Tối ưu: Sử dụng lại tham số đã tinh chỉnh của mô hình SVM tốt nhất
+    tuneGrid = svm_full_model$bestTune # <-- THAY ĐỔI 2: Lấy bestTune từ mô hình SVM
+  )
+}
+
+# So sánh kết quả của các phiên bản SVM
+svm_pca_comparison <- resamples(pca_comparison_list)
+summary(svm_pca_comparison)
+```
+
+**So sánh hiệu năng SVM với và không dùng PCA**
+
+| Mô hình       | ROC (TB)   | Sensitivity | Specificity |
+| ------------- | ---------- | ----------- | ----------- |
+| **SVM\_Full** | **0.9980** | **0.9883**  | **0.9679**  |
+| SVM\_12PCA    | 0.9951     | 0.9795      | 0.9614      |
+| SVM\_9PCA     | 0.9946     | 0.9750      | 0.9571      |
+| SVM\_4PCA     | 0.9926     | 0.9694      | 0.9560      |
+
+---
+
+**Nhận xét:**
+
+* **SVM\_Full** cho hiệu năng cao nhất, cho thấy việc giữ nguyên toàn bộ đặc trưng mang lại kết quả tối ưu.
+* Khi số chiều giảm dần qua PCA, hiệu năng có xu hướng giảm theo, đặc biệt rõ ở chỉ số ROC và Sensitivity.
+* Tuy nhiên, các phiên bản như **SVM\_12PCA hoặc SVM\_9PCA vẫn duy trì hiệu năng ở mức cao**, với ROC trên 0.994 và Sensitivity trên 0.97 → cho thấy kết quả **vẫn đủ mạnh để được xem là chấp nhận được trong nhiều tình huống ứng dụng thực tế**.
+
+---
+
+**Tác động của PCA đến hiệu năng và tính chấp nhận được**
+
+* PCA giúp giảm số chiều đầu vào, từ đó **rút ngắn thời gian huấn luyện**, **giảm tài nguyên tính toán**, và **hạn chế quá khớp** khi số đặc trưng ban đầu lớn.
+* Dù hiệu năng có giảm nhẹ, các mô hình PCA vẫn cho kết quả tương đối ổn định và có thể **đủ tốt cho các hệ thống triển khai thực tế cần tốc độ và hiệu quả cao hơn**.
+* Như vậy, PCA là **một sự đánh đổi hợp lý** giữa độ chính xác và hiệu suất tính toán, nhất là khi mô hình được tích hợp vào các hệ thống thời gian thực hoặc tài nguyên hạn chế.
+
+---
+
+**Kết luận**
+
+* Nếu mục tiêu ưu tiên là độ chính xác tuyệt đối trong môi trường yêu cầu cao (như y tế), **SVM\_Full** vẫn là lựa chọn tốt nhất.
+* Tuy nhiên, các phiên bản **SVM\_PCA với 9–12 thành phần chính** hoàn toàn có thể **được chấp nhận** trong các tình huống thực tế, khi hiệu năng chỉ giảm nhẹ nhưng mô hình trở nên nhẹ hơn, nhanh hơn và dễ triển khai hơn.
+
+$\Rightarrow$ Do đó, PCA là lựa chọn khả thi trong thực hành nếu cần cân bằng giữa độ chính xác và hiệu suất tính toán.
+
+
+## 6.4 Đánh giá trên tập kiểm tra
+
+Dựa trên các phân tích trước đó, hai mô hình tiềm năng nhất được lựa chọn là SVM_Full (có hiệu năng cao nhất) và SVM_12PCA (đạt được sự cân bằng hợp lý giữa hiệu năng và độ phức tạp mô hình). Trong phần này, chúng tôi sẽ tiến hành đánh giá cả hai mô hình trên tập dữ liệu kiểm tra nhằm đưa ra quyết định lựa chọn cuối cùng.
+
+---
+
+Đánh giá model `SVM_full`
+```{r}
+# Lấy mô hình SVM_Full từ danh sách so sánh
+model_full <- pca_comparison_list[["SVM_Full"]]
+
+# Dự đoán trên tập kiểm tra
+predictions_full <- predict(model_full, newdata = test_features)
+
+# Tạo ma trận nhầm lẫn
+cat("--- Kết quả của mô hình SVM_Full trên tập Test ---\n")
+cm_full <- confusionMatrix(data = predictions_full, reference = y_test, positive = "Seizure")
+print(cm_full)
+```
+
+**Hiệu năng mô hình SVM\_Full trên tập Test**
+
+|                         | Dự đoán: NonSeizure | Dự đoán: Seizure |
+| ----------------------- | ------------------- | ---------------- |
+| **Thực tế: NonSeizure** | 1827                | 13               |
+| **Thực tế: Seizure**    | 13                  | 447              |
+
+---
+
+**Nhận xét:**
+
+* **Độ chính xác tổng thể (Accuracy):**
+  Đạt **98.87%** với khoảng tin cậy 95% là **(98.35%, 99.26%)** → cho thấy mô hình hoạt động ổn định và đáng tin cậy.
+
+* **Độ nhạy (Sensitivity – phát hiện Seizure):**
+  **97.17%** → mô hình phát hiện đúng phần lớn các trường hợp thực sự bị động kinh, giảm thiểu nguy cơ bỏ sót bệnh nhân.
+
+* **Độ đặc hiệu (Specificity – nhận diện NonSeizure):**
+  **99.29%** → mô hình rất chính xác trong việc xác định người không bị bệnh, giúp hạn chế báo động giả.
+
+* **Chỉ số Kappa:**
+  **0.9647** → phản ánh mức độ đồng thuận rất cao giữa dự đoán và thực tế, vượt xa mức ngẫu nhiên.
+
+* **Balanced Accuracy:**
+  **98.23%** → trung bình giữa Sensitivity và Specificity, phù hợp khi dữ liệu mất cân bằng.
+
+* **McNemar’s Test p-value = 1:**
+  Cho thấy không có sự bất đối xứng đáng kể giữa hai loại lỗi (False Positive và False Negative) → dự đoán hai chiều cân bằng.
+
+---
+
+Đánh giá mô hình `SVM_12PCA`
+
+```{r}
+# Lấy mô hình SVM_12PCA từ danh sách so sánh
+model_pca12 <- pca_comparison_list[["SVM_12PCA"]]
+
+# Dự đoán trên tập kiểm tra
+predictions_pca12 <- predict(model_pca12, newdata = test_features)
+
+# Tạo ma trận nhầm lẫn
+cat("\n--- Kết quả của mô hình SVM_12PCA trên tập Test ---\n")
+cm_pca12 <- confusionMatrix(data = predictions_pca12, reference = y_test, positive = "Seizure")
+print(cm_pca12)
+```
+**Hiệu năng mô hình SVM\_12PCA trên tập Test**
+
+|                         | Dự đoán: NonSeizure | Dự đoán: Seizure |
+| ----------------------- | ------------------- | ---------------- |
+| **Thực tế: NonSeizure** | 1812                | 21               |
+| **Thực tế: Seizure**    | 28                  | 439              |
+
+---
+
+**Nhận xét:**
+
+* **Accuracy:**
+  Mô hình đạt độ chính xác **97.87%** (CI 95%: 97.19% – 98.42%) → vẫn ở mức rất cao và đáng tin cậy.
+
+* **Sensitivity (phát hiện Seizure):**
+  **95.43%** → mô hình phát hiện tốt phần lớn ca bệnh, tuy có giảm nhẹ so với SVM\_Full (97.17%).
+
+* **Specificity (phân biệt NonSeizure):**
+  **98.48%** → vẫn giữ độ đặc hiệu rất cao, chỉ giảm khoảng 0.8% so với SVM\_Full.
+
+* **Kappa = 0.9338:**
+  Thể hiện độ phù hợp cao giữa dự đoán và thực tế, cho thấy mô hình đáng tin cậy.
+
+* **Balanced Accuracy = 96.96%:**
+  Vẫn nằm trong ngưỡng cao, phù hợp với dữ liệu không cân bằng.
+
+* **McNemar’s test p-value = 0.3914:**
+  Không có sự mất cân bằng đáng kể giữa hai loại lỗi → mô hình dự đoán ổn định theo cả hai hướng.
+
+---
+
+**So sánh nhanh với SVM\_Full**
+
+| Chỉ số      | SVM\_Full | SVM\_12PCA |
+| ----------- | --------- | ---------- |
+| Accuracy    | 98.87%    | 97.87%     |
+| Sensitivity | 97.17%    | 95.43%     |
+| Specificity | 99.29%    | 98.48%     |
+| Kappa       | 0.9647    | 0.9338     |
+
+→ **Hiệu năng giảm nhẹ**, nhưng vẫn nằm trong ngưỡng **chấp nhận được**, đặc biệt là khi xét đến lợi ích tính toán từ việc giảm chiều (bộ dữ liệu nhỏ gọn hơn, huấn luyện nhanh hơn).
+
+---
+
+```{r}
+# Trích xuất các chỉ số từ hai đối tượng confusionMatrix
+metrics_summary <- tibble(
+  ChiSo = c("Accuracy", "Sensitivity", "Specificity", "F1"),
+  SVM_Full = c(
+    cm_full$overall['Accuracy'],
+    cm_full$byClass['Sensitivity'],
+    cm_full$byClass['Specificity'],
+    cm_full$byClass['F1']
+  ),
+  SVM_12PCA = c(
+    cm_pca12$overall['Accuracy'],
+    cm_pca12$byClass['Sensitivity'],
+    cm_pca12$byClass['Specificity'],
+    cm_pca12$byClass['F1']
+  )
+)
+
+# In ra bảng so sánh
+knitr::kable(metrics_summary, digits = 4, caption = "So sánh hiệu năng trên tập Test")
+```
+
+**So sánh hiệu năng trên tập kiểm tra**
+
+Bảng dưới đây trình bày các chỉ số đánh giá hiệu năng của hai mô hình SVM được lựa chọn, bao gồm: **SVM\_Full** (huấn luyện trên toàn bộ tập đặc trưng gốc) và **SVM\_12PCA** (huấn luyện trên 12 thành phần chính sau PCA).
+
+| Chỉ số      | SVM\_Full | SVM\_12PCA |
+| ----------- | --------- | ---------- |
+| Accuracy    | 0.9887    | 0.9787     |
+| Sensitivity | 0.9717    | 0.9543     |
+| Specificity | 0.9929    | 0.9848     |
+| F1-score    | 0.9717    | 0.9471     |
+
+**Nhận xét:**
+
+* **SVM\_Full vượt trội hơn ở tất cả các chỉ số**, đặc biệt là về Accuracy (0.9887 so với 0.9787) và F1-score (0.9717 so với 0.9471).
+* **Độ nhạy (Sensitivity)** và **độ đặc hiệu (Specificity)** của SVM\_Full cũng cao hơn, cho thấy mô hình này vừa phát hiện tốt các trường hợp dương tính, vừa hạn chế được báo động giả.
+* Tuy nhiên, **SVM\_12PCA** vẫn thể hiện hiệu năng khá tốt, trong khi sử dụng số chiều đặc trưng ít hơn đáng kể → phù hợp với các bài toán cần giảm thiểu độ phức tạp mô hình hoặc tài nguyên tính toán.
+
+**Kết luận:**
+Với mục tiêu tối ưu hiệu năng dự đoán, mô hình **SVM\_Full** là lựa chọn phù hợp nhất để triển khai trên tập dữ liệu hiện tại. Tuy nhiên, mô hình **SVM\_12PCA** vẫn có thể được cân nhắc trong các tình huống yêu cầu đơn giản hóa mô hình hoặc giảm thiểu chi phí tính toán.
+
+
+Dưới đây là phiên bản **tối ưu hơn** của phần **kết luận**, được chỉnh sửa để đảm bảo văn phong học thuật, cô đọng nhưng sâu sắc, và nhấn mạnh đồng thời **đóng góp kỹ thuật** lẫn **ý nghĩa ứng dụng thực tiễn** của nghiên cứu:
+
+---
+
+# VII. Kết luận
+
+Nghiên cứu này đã chứng minh rằng từ các đoạn tín hiệu EEG ngắn hạn, hoàn toàn có thể xây dựng một hệ thống tự động nhận diện cơn động kinh với độ chính xác và độ tin cậy cao, mở ra giải pháp khả thi cho việc hỗ trợ chẩn đoán thay thế phương pháp thủ công truyền thống vốn phụ thuộc nhiều vào chuyên gia.
+
+Cốt lõi của hệ thống là quy trình tiền xử lý và trích xuất đặc trưng được thiết kế kỹ lưỡng. Việc khai thác thông tin từ nhiều miền – bao gồm miền thời gian, miền tần số và miền wavelet – đã cho phép làm nổi bật các đặc điểm tín hiệu đặc trưng cho trạng thái co giật, ngay cả khi chúng không dễ nhận biết từ dữ liệu thô. Các phân tích thống kê đa biến (MANOVA) và trực quan hóa phi tuyến (t-SNE, UMAP) đã xác nhận sự phân tách rõ ràng giữa hai trạng thái, cho thấy tiềm năng phân loại rất cao của bộ đặc trưng thu được.
+
+Để đối phó với không gian đặc trưng có chiều cao, nghiên cứu đã tích hợp Phân tích Thành phần Chính (PCA) như một bước rút gọn chiều hiệu quả. Dù mô hình sử dụng dữ liệu sau PCA (SVM\_12PCA) có độ chính xác thấp hơn đôi chút, hiệu suất vẫn duy trì ở mức rất cao (97.87%), cho thấy PCA là một lựa chọn hợp lý trong các tình huống yêu cầu giảm thiểu độ phức tạp tính toán, ví dụ như triển khai thực tế trên thiết bị đeo hoặc hệ thống nhúng.
+
+Trong số các mô hình được đánh giá, **Máy Vector Hỗ trợ với bộ đặc trưng đầy đủ (SVM\_Full)** nổi bật với hiệu năng vượt trội:  đạt **độ chính xác (accuracy) 98.87%**, **độ nhạy (sensitivity) 97.17%**, và **độ đặc hiệu (specificity) 99.29%** trên tập kiểm tra. Mức hiệu suất này không chỉ cho thấy khả năng phân loại mạnh mẽ, mà còn đặc biệt phù hợp trong bối cảnh lâm sàng – nơi cả hai yếu tố: phát hiện chính xác và giảm thiểu báo động giả, đều có ý nghĩa quan trọng.
+
+Bên cạnh giá trị học thuật, kết quả nghiên cứu còn mở ra các hướng ứng dụng đầy triển vọng: từ công cụ hỗ trợ chuyên gia thần kinh trong đánh giá nhanh, đến nền tảng cho các hệ thống cảnh báo sớm tại giường bệnh hoặc thiết bị theo dõi cá nhân cho bệnh nhân động kinh. Trong tương lai, nghiên cứu có thể được mở rộng theo hướng: kiểm thử trên tập dữ liệu đa trung tâm, triển khai theo thời gian thực, hoặc tích hợp các mô hình học sâu (deep learning) nhằm hướng đến khả năng tự động hóa toàn diện quá trình phân tích tín hiệu EEG.
+
