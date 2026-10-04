@@ -1,36 +1,36 @@
-# --- Xử lý dữ liệu và Hệ sinh thái Tidy ---
-tidyverse      # Bao gồm ggplot2, dplyr, readr, purrr, v.v.
-patchwork      # Sắp xếp các biểu đồ ggplot
-scales         # Định dạng tỷ lệ và đơn vị trên biểu đồ
+# --- Data Processing and Tidy Ecosystem ---
+tidyverse      # Includes ggplot2, dplyr, readr, purrr, etc.
+patchwork      # Arrange ggplot figures
+scales         # Format scales and units on plots
 
-# --- Phân tích tín hiệu và Đặc trưng EEG ---
-seewave        # Phân tích phổ tần số (PSD)
-wavelets       # Biến đổi Wavelet rời rạc (DWT)
-pracma         # Tích phân hình thang (trapz) cho công suất dải tần
-moments        # Tính toán Skewness và Kurtosis
-TSEntropies    # Tính toán các chỉ số Entropy
+# --- Signal Processing and EEG Features ---
+seewave        # Power spectral density (PSD) analysis
+wavelets       # Discrete Wavelet Transform (DWT)
+pracma         # Trapezoidal integration (trapz) for band power
+moments        # Skewness and Kurtosis calculation
+TSEntropies    # Entropy metrics calculation
 
-# --- Thống kê và Kiểm định Đa biến ---
-psych          # Kiểm định KMO, Bartlett và Phân tích nhân tố (FA)
-factoextra     # Trực quan hóa PCA và phân cụm
-biotools       # Kiểm định Box's M cho ma trận hiệp phương sai
-MVN            # Kiểm định phân phối chuẩn đa biến (Henze-Zirkler)
-mvnormtest     # Các kiểm định chuẩn đa biến bổ trợ
+# --- Statistics and Multivariate Testing ---
+psych          # KMO, Bartlett tests, and Factor Analysis (FA)
+factoextra     # PCA visualization and clustering
+biotools       # Box's M test for covariance matrices
+MVN            # Multivariate Normality tests (Henze-Zirkler)
+mvnormtest     # Supplementary multivariate normality tests
 
-# --- Học máy và Dự báo ---
-caret          # Framework huấn luyện và đánh giá mô hình
-recipes        # Xây dựng Pipeline tiền xử lý dữ liệu
-themis         # Xử lý mất cân bằng dữ liệu (SMOTE)
-randomForest   # Thuật toán Rừng ngẫu nhiên
-e1071          # Thuật toán Support Vector Machine (SVM)
-MASS           # Thuật toán Linear Discriminant Analysis (LDA)
-pROC           # Phân tích đường cong ROC và chỉ số AUC
+# --- Machine Learning and Modeling ---
+caret          # Machine learning training and evaluation framework
+recipes        # Data preprocessing pipeline construction
+themis         # Imbalanced data handling (SMOTE)
+randomForest   # Random Forest algorithm
+e1071          # Support Vector Machine (SVM) algorithm
+MASS           # Linear Discriminant Analysis (LDA) algorithm
+pROC           # ROC curve analysis and AUC metrics
 
-# --- Giảm chiều phi tuyến ---
-Rtsne          # Thuật toán t-SNE
-uwot           # Thuật toán UMAP
+# --- Non-linear Dimensionality Reduction ---
+Rtsne          # t-SNE algorithm
+uwot           # UMAP algorithm
 
-# --- Báo cáo ---
-knitr          # Tạo báo cáo động RMarkdown
-rmarkdown      # Chuyển đổi file .Rmd sang HTML/PDF
-tidytext       # Hỗ trợ sắp xếp dữ liệu text/factor trong biểu đồ
+# --- Reporting ---
+knitr          # Dynamic RMarkdown report generation
+rmarkdown      # Convert .Rmd files to HTML/PDF
+tidytext       # Text/factor ordering support for ggplot panels

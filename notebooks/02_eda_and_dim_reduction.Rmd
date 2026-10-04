@@ -1,6 +1,6 @@
 ---
-title: "Phân tích Khám phá và Giảm chiều\n"
-author: "22110012 - Hữu Ân  \n\n 22110059 - Hồng Hiên\n"
+title: "Exploratory Data Analysis and Dimensionality Reduction\n"
+author: "22110012 - Huu An  \n\n 22110059 - Hong Hien\n"
 date: "`r Sys.Date()`"
 output:
   html_document:
@@ -17,150 +17,145 @@ output:
 ---
 
 ```{r setup, include=FALSE}
-# --- Thiết lập chung ---
+# --- Global chunk settings ---
 knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.align = 'center')
 
-# --- Tải các thư viện cần thiết cho phân tích đa biến và giảm chiều ---
-library(tidyverse)    # Xử lý dữ liệu và vẽ biểu đồ
-library(caret)        # Tiền xử lý dữ liệu (nearZeroVar, preProcess)
-library(factoextra)   # Trực quan hóa kết quả PCA
-library(psych)        # Kiểm định KMO, Bartlett, Phân tích nhân tố (FA)
-library(biotools)     # Kiểm định Box's M
-library(MVN)          # Kiểm định phân phối chuẩn đa biến
-library(Rtsne)        # Giảm chiều phi tuyến t-SNE
-library(uwot)         # Giảm chiều phi tuyến UMAP
-library(patchwork)    # Sắp xếp biểu đồ
-library(scales)       # Định dạng tỷ lệ phần trăm
+# --- Libraries for multivariate analysis and dimensionality reduction ---
+library(tidyverse)    # Data manipulation and ggplot2
+library(caret)        # Preprocessing (nearZeroVar, preProcess)
+library(factoextra)   # PCA visualization
+library(psych)        # KMO, Bartlett tests, Factor Analysis (FA)
+library(biotools)     # Box's M test
+library(MVN)          # Multivariate normality testing
+library(Rtsne)        # Non-linear dimensionality reduction: t-SNE
+library(uwot)         # Non-linear dimensionality reduction: UMAP
+library(patchwork)    # Combining plots
+library(scales)       # Percentage scaling formatting
 ```
 
-# IV. Phân tích Thống kê Nhiều chiều
+# IV. Multivariate Statistical Analysis
 
-Chúng ta sẽ khám phá bộ đặc trưng mới tạo ra bằng các phương pháp thống kê đa biến.
+We explore the newly engineered feature representations using multivariate statistical methods.
 
 ```{r}
-# --- IV. Phân tích Thống kê Nhiều chiều ---
+# --- IV. Multivariate Statistical Analysis ---
 
-# 1. Đọc dữ liệu
+# Load extracted feature dataset
 train_data <- readr::read_csv("EEG_Features_Extracted.csv")
 
-# 2. Tách X và y (Sử dụng dplyr:: để tránh xung đột)
+# Separate predictors (X) and target variable (y)
 X_features <- train_data %>% dplyr::select(-target)
 y_labels_factor <- as.factor(train_data$target)
 
-# 3. Kiểm tra kích thước dữ liệu
-# Dự kiến: 11500 hàng và 39 cột đặc trưng
+# Verify data dimensions
+# Expected: 11,500 rows and 39 feature columns
 dim(X_features)
 ```
 
 ```{r prepare-for-analysis}
-# Xác định các cột có phương sai gần bằng không (near-zero variance).
+# Identify near-zero variance predictors
 nzv_cols_indices <- nearZeroVar(X_features)
 
-# In ra các cột bị loại bỏ (nếu có) để kiểm tra
+# Report removed columns (if any)
 if(length(nzv_cols_indices) > 0) {
-  print("Loại bỏ các cột có phương sai gần bằng không:")
+  print("Removing near-zero variance columns:")
   print(names(X_features)[nzv_cols_indices])
   
-  # Loại bỏ các cột này khỏi bộ dữ liệu
+  # Exclude these columns from analysis
   X_features_filtered <- X_features[, -nzv_cols_indices]
 } else {
   X_features_filtered <- X_features
 }
 
-# Chuẩn hóa trên bộ dữ liệu đã được lọc sạch
+# Standardize (center and scale) the filtered feature space
 scaler <- preProcess(X_features_filtered, method = c("center", "scale"))
 X_features_scaled <- predict(scaler, X_features_filtered)
 
-# Kiểm tra
-print(paste("Số giá trị không hữu hạn còn lại:", sum(!is.finite(as.matrix(X_features_scaled)))))
+# Check for non-finite values
+print(paste("Remaining non-finite values:", sum(!is.finite(as.matrix(X_features_scaled)))))
 ```
 
-## 4.1. Phân tích Thành phần chính (PCA)
+## 4.1. Principal Component Analysis (PCA)
 
-PCA giúp giảm chiều dữ liệu trong khi vẫn giữ lại phần lớn thông tin (phương sai).
+PCA reduces feature dimensionality while preserving maximal variance and eliminating multicollinearity.
 
 ```{r pca-analysis}
 pca_obj <- prcomp(X_features_scaled, scale. = TRUE)
 ```
 
 ```{r plot}
-# Lấy phương sai giải thích từ đối tượng PCA
+# Extract explained and cumulative variance
 explained_variance <- pca_obj$sdev^2 / sum(pca_obj$sdev^2)
 cumulative_variance <- cumsum(explained_variance)
 
-# Tạo dataframe để vẽ
+# Construct dataframe for visualization
 plot_data <- tibble(
   component = 1:length(explained_variance),
   explained_variance = explained_variance,
   cumulative_variance = cumulative_variance
 )
 
-# Vẽ biểu đồ gộp
+# Combined Scree and Cumulative Variance Plot
 ggplot(plot_data, aes(x = component)) +
-  # Vẽ các cột cho phương sai riêng lẻ
+  # Individual variance bars
   geom_col(aes(y = explained_variance), fill = "steelblue", alpha = 0.8) +
   
-  # Vẽ đường "khuỷu tay" nối các đỉnh cột
+  # Elbow line
   geom_line(aes(y = explained_variance), color = "black", size = 0.8) +
   geom_point(aes(y = explained_variance), color = "black", size = 2) +
   
-  # Vẽ đường tích lũy
+  # Cumulative variance curve
   geom_line(aes(y = cumulative_variance), color = "red", size = 1) +
   geom_point(aes(y = cumulative_variance), color = "red", size = 2) +
   
-  # Thêm nhãn % cho 10 thành phần đầu tiên
+  # Percentage labels for first 10 components
   geom_text(
     data = . %>% filter(component <= 10),
-    # SỬA LỖI Ở ĐÂY: Thêm "scales::" vào trước hàm percent
     aes(y = explained_variance, label = scales::percent(explained_variance, accuracy = 0.1)),
-    vjust = -0.8, # Đẩy chữ lên trên điểm
+    vjust = -0.8,
     size = 3.5,
     color = "black"
   ) +
   
-  # Thêm các đường tham chiếu và chú thích
+  # Reference thresholds
   geom_hline(yintercept = 0.9, linetype = "dashed", color = "blue", alpha = 0.7) +
   geom_hline(yintercept = 0.95, linetype = "dashed", color = "darkgreen", alpha = 0.7) +
-  annotate("text", x = max(plot_data$component) * 0.7, y = 0.9, label = "90% phương sai", vjust = -0.5, color="blue") +
-  annotate("text", x = max(plot_data$component) * 0.7, y = 0.95, label = "95% phương sai", vjust = -0.5, color="darkgreen") +
+  annotate("text", x = max(plot_data$component) * 0.7, y = 0.9, label = "90% Variance Threshold", vjust = -0.5, color = "blue") +
+  annotate("text", x = max(plot_data$component) * 0.7, y = 0.95, label = "95% Variance Threshold", vjust = -0.5, color = "darkgreen") +
   
-  # Tinh chỉnh các trục và tiêu đề
   scale_x_continuous(breaks = 1:length(explained_variance)) +
   scale_y_continuous(
-    name = "Tỷ lệ Phương sai Giải thích",
-    labels = scales::percent # Dòng này của bạn đã viết đúng
+    name = "Proportion of Explained Variance",
+    labels = scales::percent
   ) +
   labs(
-    title = "Biểu đồ Scree Plot kết hợp của PCA",
-    subtitle = "Hiển thị phương sai riêng lẻ (cột, đường đen) và phương sai tích lũy (đường đỏ)",
-    x = "Thành phần Chính",
-    y = "Tỷ lệ Phương sai Giải thích"
+    title = "Combined PCA Scree Plot",
+    subtitle = "Individual variance (bars, black line) and cumulative variance (red curve)",
+    x = "Principal Component",
+    y = "Proportion of Explained Variance"
   ) +
   theme_minimal() +
   theme(
-    plot.title = element_text(size=16, face="bold"),
-    plot.subtitle = element_text(size=12)
+    plot.title = element_text(size = 16, face = "bold"),
+    plot.subtitle = element_text(size = 12)
   )
 ```
 
-**Nhận xét:**
+**Interpretation:**
 
-Biểu đồ Scree Plot cung cấp hai cách tiếp cận phổ biến để xác định số lượng thành phần chính (PC) cần giữ lại:
+The Scree Plot offers two standard approaches for selecting the number of principal components:
 
-1. **Phương pháp Điểm khuỷu tay (Elbow Method):**
-   Phương pháp này dựa vào việc xác định điểm "gãy" trên đường biểu diễn phương sai riêng phần – nơi mức giảm phương sai bắt đầu chậm lại. Trong biểu đồ này, khuỷu tay có thể được nhận thấy rõ tại PC3 hoặc PC4, cho thấy sau ngưỡng này, các thành phần đóng góp thêm không đáng kể vào tổng phương sai.
+1. **Elbow Criterion:**
+   The variance reduction flattens noticeably at PC3 or PC4, indicating that subsequent components capture progressively diminishing amounts of unique variance.
 
-2. **Phương pháp Tỷ lệ Phương sai Tích lũy:**
-   Dựa trên đường cong tích lũy (thường biểu diễn bằng màu đỏ), ta có thể xác định số lượng PC cần thiết để giữ lại một tỷ lệ phương sai mong muốn:
+2. **Cumulative Variance Threshold:**
+   - Retaining **90%** of total variance requires **9 PCs**.
+   - Retaining **95%** of total variance requires **12 PCs**.
 
-   * Để giữ lại khoảng **90%** phương sai: cần **9 PCs**.
-   * Để giữ lại khoảng **95%** phương sai: cần **12 PCs**.
+**Conclusion:**
 
-**Kết luận:**
-
-* **Đối với giải phương sai**, phương pháp **Điểm khuỷu tay** (Elbow Method) cho thấy có thể giữ lại khoảng **3–4 PCs** là hợp lý. Đây là lựa chọn phù hợp để diễn giải dữ liệu.
-
-* **Đối với huấn luyện mô hình**, phương pháp **Tỷ lệ phương sai tích lũy** cho thấy cần giữ lại khoảng **9–11 PCs** để bảo toàn **90–95%** tổng phương sai. Việc này giúp mô hình học máy có đủ thông tin để hoạt động hiệu quả, đồng thời giảm nhiễu và chi phí tính toán so với việc dùng toàn bộ biến ban đầu và đảm bảo mang đủ ý nghĩ thực tế.
+* **Data Interpretation:** The Elbow Method suggests **3–4 PCs** provide a parsimonious summary for visual exploration and latent structure interpretation.
+* **Model Training:** Retaining **9–12 PCs** preserves **90–95%** of cumulative variance, providing sufficient discriminative information for machine learning while substantially reducing computational overhead and noise.
 
 ```{r}
 library(factoextra)
@@ -171,13 +166,12 @@ fviz_pca_ind(pca_obj,
              col.ind = y_labels_factor,
              palette = c("#00AFBB", "#E7B800"),
              addEllipses = TRUE,
-             legend.title = "Lớp") +
-  labs(title="Trực quan hóa PCA")
+             legend.title = "Class") +
+  labs(title = "PCA Observation Projection (PC1 vs PC2)")
 ```
-*Nhận xét:* 
-Biểu đồ phân tán PCA cho thấy có sự phân tách tương đối rõ rệt giữa hai lớp (0 và 1) trên mặt phẳng tạo bởi hai thành phần chính đầu tiên. Hai thành phần này giải thích được tổng cộng 56.7% phương sai của dữ liệu (gồm 39.7% từ thành phần 1 và 17% từ thành phần 2). Sự phân tách chủ yếu diễn ra theo trục chính thứ nhất (Dim1), cho thấy các đặc trưng sau khi giảm chiều có khả năng hỗ trợ phân biệt hai trạng thái.
 
-Tuy nhiên, vẫn tồn tại một số điểm chồng lấn giữa hai lớp, đặc biệt là các điểm thuộc lớp 0 phân bố rải rác trong vùng của lớp 1. Điều này cho thấy biên phân tách giữa hai lớp không hoàn toàn tuyến tính. Do đó, các kỹ thuật giảm chiều phi tuyến như t-SNE hoặc UMAP sẽ được sử dụng bổ sung nhằm khảo sát rõ hơn cấu trúc phân lớp trong không gian đặc trưng phi tuyến.
+*Observation:*
+The scatter plot demonstrates noticeable separation between Class 0 (Non-Seizure) and Class 1 (Seizure) across the first two principal components, which account for 56.7% of total variance (39.7% from PC1 and 17.0% from PC2). Separation occurs predominantly along the first dimension (Dim1). Some overlap is visible near the decision boundary, suggesting that non-linear manifold representations (e.g., t-SNE, UMAP) are warranted to inspect non-linear separability.
 
 ```{r}
 eigenvalues <- pca_obj$sdev^2
@@ -190,7 +184,8 @@ data.frame(
   Cumulative_Percent = round(cumsum(variance_percent), 2)
 )
 ```
-Sử dụng tiêu chí Kaiser
+
+Applying the Kaiser-Guttman criterion (eigenvalues > 1):
 ```{r}
 eigenvalues <- pca_obj$sdev^2
 selected_pcs <- sum(eigenvalues > 1)
@@ -198,202 +193,126 @@ selected_pcs
 ```
 
 ```{r}
-# Lấy tải trọng (loadings) của 4 PC đầu tiên và chuyển sang dạng tidy
+# Extract loadings for the first 4 PCs in tidy format
 loadings_long <- as.data.frame(pca_obj$rotation[, 1:4]) %>%
   mutate(feature = rownames(.)) %>%
-  # Chuyển từ dạng rộng sang dạng dài
   tidyr::pivot_longer(
     cols = c(PC1, PC2, PC3, PC4),
     names_to = "pc",
     values_to = "loading"
   )
 
-# Lặp qua từng PC để vẽ và in ra biểu đồ riêng biệt
+# Render separate loadings bar charts for each component
 pc_names <- unique(loadings_long$pc)
 
 for (pc_name in pc_names) {
+  plot_data <- loadings_long %>% filter(pc == pc_name)
   
-  # Lọc dữ liệu chỉ cho PC hiện tại
-  plot_data <- loadings_long %>%
-    filter(pc == pc_name)
-  
-  # Tạo biểu đồ cho PC hiện tại
   p <- ggplot(plot_data, aes(y = loading, 
                              x = reorder(feature, loading), 
-                             fill = loading > 0)) + # Tô màu khác nhau cho giá trị âm/dương
+                             fill = loading > 0)) +
     geom_col(show.legend = FALSE) +
-    coord_flip() + # Lật trục để dễ đọc tên đặc trưng
+    coord_flip() +
     labs(
-      title = paste("Phân tích Tải trọng (Loadings) cho", pc_name), # Tiêu đề động
-      x = "Đặc trưng (Feature)",
-      y = "Giá trị Tải trọng (Loading)"
+      title = paste("Factor Loading Analysis for", pc_name),
+      x = "Feature",
+      y = "Loading Value"
     ) +
     theme_minimal() +
     theme(
       plot.title = element_text(size = 16, face = "bold")
     )
   
-  # In biểu đồ ra output
   print(p)
 }
 ```
-**Diễn giải các thành phần chính**
 
-**PC1 - Độ lớn và sự Biến động chung của Tín hiệu**
+**Interpretation of Principal Components:**
 
-Thành phần chính 1 (PC1) nắm bắt sự biến thiên tổng thể về biên độ và năng lượng của tín hiệu EEG. Nó có mối tương quan chặt chẽ với các đặc trưng đo lường độ lớn và năng lượng tín hiệu như `abs_max` (giá trị tuyệt đối lớn nhất), `std` (độ lệch chuẩn), `rms` (giá trị hiệu dụng), và `var` (phương sai). Đồng thời, tất cả các mức năng lượng wavelet (`wavelet_energy_level_1` đến `5`) đều có tải trọng dương cao, khẳng định vai trò của PC1 trong việc đo lường năng lượng trên toàn bộ phổ tần số. Nhìn chung, PC1 giúp phân biệt giữa các tín hiệu có năng lượng cao, dao động mạnh (điển hình của cơn co giật) và các tín hiệu có biên độ thấp, ổn định hơn.
-
-* **Tải trọng dương cao:** `abs_max`, `std`, `rms`, `var`, tất cả các `wavelet_energy_level` -> Tín hiệu có năng lượng và biên độ dao động lớn.
-* **Tải trọng âm cao:** `min`, `skew` -> Tín hiệu có giá trị âm sâu, phân bố lệch.
-
----
-
-**PC2 - Sự đối lập giữa Năng lượng Thô và Đặc tính Phổ**
-
-PC2 thể hiện một sự tương phản phức tạp hơn. Nó dường như tách biệt các tín hiệu có năng lượng thô cao (như `rms`, `var`) khỏi các tín hiệu có đặc tính rõ ràng về hình dạng và phổ tần số. Cụ thể, PC2 có tải trọng dương với các chỉ số năng lượng cơ bản nhưng lại có tải trọng âm với hầu hết các chỉ số quan trọng khác như `crest_factor`, `margin_factor` (các yếu tố đỉnh), và toàn bộ các dải công suất (`delta`, `theta`, `alpha`, `beta`, `gamma`). Điều này cho thấy PC2 có thể đang phân biệt các loại dao động khác nhau mà không chỉ đơn thuần dựa trên năng lượng.
-
-* **Tải trọng dương cao:** `wavelet_energy_level_4`, `rms`, `var` -> Năng lượng tín hiệu thô cao.
-* **Tải trọng âm cao:** `crest_factor`, `impulse_factor`, tất cả các `power_band` -> Tín hiệu có đỉnh nhọn và năng lượng phổ cụ thể.
+**PC1 - Overall Signal Magnitude and Energy**
+PC1 captures the primary amplitude and energy dispersion of the EEG recording. It correlates strongly with amplitude scale features: `abs_max`, `std`, `rms`, and `var`. All wavelet decomposition energies (`wavelet_energy_level_1` through `5`) display high positive loadings, highlighting PC1's role in measuring broad-spectrum energy. It effectively differentiates high-energy, volatile seizure activity from low-amplitude baseline recordings.
+* **Strong Positive Loadings:** `abs_max`, `std`, `rms`, `var`, all `wavelet_energy_level` features.
+* **Strong Negative Loadings:** `min`, `skew`.
 
 ---
 
-**PC3 - Độ phức tạp và Hoạt động Tần số cao**
-
-PC3 làm nổi bật sự khác biệt giữa các trạng thái nhận thức. Nó có tương quan dương mạnh với các đặc trưng thể hiện sự phức tạp và hoạt động nhanh, bao gồm `approx_entropy` (độ phức tạp/khó đoán của tín hiệu), `zero_crossings` (số lần qua trục zero), và năng lượng ở các dải tần số cao (`gamma_power`, `beta_power`, `alpha_power`). Ngược lại, nó có tương quan âm với `kurtosis` (độ nhọn) và các yếu tố đỉnh. Điều này cho thấy PC3 giúp phân biệt giữa các trạng thái não bộ tích cực, tỉnh táo (tần số cao, phức tạp) và các trạng thái nghỉ ngơi hoặc có đỉnh sóng bất thường.
-
-* **Tải trọng dương cao:** `approx_entropy`, `gamma_power`, `beta_power`, `zero_crossings` -> Trạng thái não hoạt động, tín hiệu phức tạp.
-* **Tải trọng âm cao:** `kurtosis`, `crest_factor`, `impulse_factor` -> Tín hiệu có các đỉnh sóng cao và nhọn.
+**PC2 - Contrast Between Raw Power and Spectral/Waveform Morphology**
+PC2 captures a contrast between raw amplitude power and peak morphology. It exhibits positive loadings on bulk energy indicators (`rms`, `var`, `wavelet_energy_level_4`) but negative loadings on peakedness factors (`crest_factor`, `margin_factor`) and discrete band powers (`delta`, `theta`, `alpha`, `beta`, `gamma`).
+* **Strong Positive Loadings:** `wavelet_energy_level_4`, `rms`, `var`.
+* **Strong Negative Loadings:** `crest_factor`, `impulse_factor`, all discrete spectral band powers.
 
 ---
 
-**PC4 - Đặc tính Đỉnh nhọn và Tần số Trung-Thấp**
-
-Thành phần chính 4 dường như tập trung vào hình dạng của các đỉnh sóng và mối quan hệ của chúng với các tần số trung bình và thấp. Nó có tải trọng dương cao với `kurtosis` và các năng lượng wavelet ở độ phân giải cao (`wavelet_energy_level_1`, `wavelet_energy_level_2`). Trong khi đó, nó có tải trọng âm mạnh với các dải tần số thấp và trung bình (`delta_power`, `theta_power`, `alpha_power`) cũng như độ xiên (`skew`) của tín hiệu. PC4 có thể giúp phân biệt các tín hiệu có các đỉnh sóng nhọn, đột ngột khỏi các tín hiệu có dao động mượt mà hơn ở tần số thấp.
-
-* **Tải trọng dương cao:** `margin_factor`, `kurtosis`, `approx_entropy` -> Tín hiệu có đỉnh nhọn, phức tạp.
-* **Tải trọng âm cao:** `skew`, `delta_power`, `theta_power`, `alpha_power` -> Tín hiệu lệch, tập trung ở tần số thấp và trung bình.
+**PC3 - Signal Complexity and High-Frequency Rhythms**
+PC3 highlights cognitive and neurophysiological complexity. It exhibits strong positive correlation with dynamical complexity indicators: `approx_entropy`, `zero_crossings`, and fast frequency band powers (`gamma_power`, `beta_power`, `alpha_power`). Conversely, it loads negatively on `kurtosis` and impulsive peak ratios.
+* **Strong Positive Loadings:** `approx_entropy`, `gamma_power`, `beta_power`, `zero_crossings`.
+* **Strong Negative Loadings:** `kurtosis`, `crest_factor`, `impulse_factor`.
 
 ---
 
-## 4.2. Phân tích Nhân tố (Factor Analysis - FA)
+**PC4 - Transient Spikiness and Low-to-Mid Frequency Characteristics**
+PC4 reflects impulsive wave morphology and transient sharpness versus smooth low-frequency rhythmic oscillations. It loads positively on `margin_factor` and `kurtosis`, and negatively on lower frequency bands (`delta_power`, `theta_power`, `alpha_power`) and `skew`.
+* **Strong Positive Loadings:** `margin_factor`, `kurtosis`, `approx_entropy`.
+* **Strong Negative Loadings:** `skew`, `delta_power`, `theta_power`, `alpha_power`.
 
-FA giúp tìm ra các "nhân tố" tiềm ẩn (các biến không quan sát được) cấu thành nên các đặc trưng quan sát được của chúng ta.
+---
+
+## 4.2. Factor Analysis (FA)
+
+Factor Analysis identifies latent unobservable constructs underlying the observed feature correlations.
 
 ```{r factor-analysis}
-# Kiểm định KMO
-cat("--- Kết quả Kiểm định KMO ---\n")
+# KMO Test for sampling adequacy
+cat("--- KMO Test Results ---\n")
 kmo_result <- KMO(X_features_scaled)
 print(kmo_result)
 
-# Kiểm định Bartlett
-cat("\n--- Kết quả Kiểm định Bartlett ---\n")
+# Bartlett's Test of Sphericity
+cat("\n--- Bartlett's Test Results ---\n")
 bartlett_result <- cortest.bartlett(X_features_scaled)
 print(bartlett_result)
 ```
 
-*Nhận xét:* Kết quả từ cả hai kiểm định đều khẳng định tính phù hợp của dữ liệu cho Phân tích Nhân tố. Chỉ số KMO tổng thể (Overall MSA) đạt 0.82, được xem là mức "tốt" (meritorious), cho thấy các biến có đủ phương sai chung để có thể nhóm lại thành các nhân tố. Đồng thời, kiểm định Bartlett có ý nghĩa thống kê rất cao (p-value = 0), cho phép chúng ta bác bỏ giả thuyết rằng các biến không tương quan với nhau. Tóm lại, dữ liệu đã vượt qua các kiểm định điều kiện và hoàn toàn sẵn sàng cho bước phân tích nhân tố tiếp theo.
+*Observation:*
+Both diagnostic tests confirm data adequacy for Factor Analysis. The overall Kaiser-Meyer-Olkin Measure of Sampling Adequacy (Overall MSA) is **0.82** ("meritorious"), indicating strong common variance among predictors. Bartlett's test of sphericity is highly significant ($p < 2.2 \times 10^{-16}$), rejecting the identity correlation matrix hypothesis.
 
 ```{r Parallel Analysis}
 library(psych)
 
-# Parallel Analysis (bạn đã làm)
-fa.parallel(X_features_scaled, fa="fa")
+# Parallel Analysis
+fa.parallel(X_features_scaled, fa = "fa")
 
 # Velicer's MAP
-VSS(X_features_scaled)  # chọn số yếu tố theo độ phù hợp mô hình
+VSS(X_features_scaled)
 ```
-Biểu đồ Parallel Analysis (hình dưới) được sử dụng để xác định số lượng nhân tố tiềm ẩn nên giữ lại trong phân tích nhân tố. Đường màu xanh biểu diễn các trị riêng (eigenvalues) thu được từ dữ liệu thực tế, trong khi các đường màu đỏ thể hiện trị riêng trung bình từ dữ liệu mô phỏng và dữ liệu hoán vị (resampling).
 
-Kết quả cho thấy các trị riêng của dữ liệu thực cao hơn đáng kể so với dữ liệu giả lập ở **7 yếu tố đầu tiên**. Sau yếu tố thứ 7, đường màu xanh cắt và nằm dưới các đường tham chiếu đỏ, cho thấy các yếu tố tiếp theo không mang nhiều thông tin hơn nhiễu ngẫu nhiên.
-
-Do đó, có thể kết luận rằng **7 yếu tố tiềm ẩn** là hợp lý để giữ lại cho phân tích tiếp theo.
+The Parallel Analysis scree plot compares empirical eigenvalues from observed data against eigenvalues from random simulated matrices. The empirical eigenvalues substantially exceed simulated thresholds for the **first 7 factors**, confirming that retaining **7 latent factors** is statistically optimal.
 
 ```{r}
-# Thực hiện Phân tích Nhân tố với 7 nhân tố
-# rotate = "varimax" là một kỹ thuật xoay phổ biến giúp kết quả dễ diễn giải hơn
+# Execute Factor Analysis with 7 factors and Varimax rotation
 fa_result <- fa(X_features_scaled, nfactors = 7, rotate = "varimax")
 
-# In ra ma trận tải trọng (loadings)
-# cutoff = 0.4 để ẩn đi các tải trọng nhỏ, giúp bảng kết quả gọn gàng và dễ đọc hơn
-cat("\n--- Ma trận Tải trọng của Phân tích Nhân tố ---\n")
+# Display factor loadings matrix (suppressing loadings < 0.4 for clarity)
+cat("\n--- Factor Analysis Loadings Matrix ---\n")
 print(fa_result$loadings, cutoff = 0.4)
 ```
-**Diễn giải các Nhân tố**
 
-**Nhân tố 1 (MR1): Năng lượng và Biên độ Tổng thể**
+**Interpretation of Latent Factors:**
 
-Đây là nhân tố quan trọng nhất, giải thích tới **35.8%** phương sai. Nó có tải trọng cao trên các biến mô tả năng lượng, độ lệch, và độ lớn của tín hiệu EEG.
+* **Factor 1 (MR1) - Overall Energy and Amplitude (35.8% Variance):** Dominated by `std` (0.975), `var` (0.985), `min` (-0.920), `max` (0.879), `rms` (0.984), `abs_max` (0.944), and wavelet energies. Represents total signal power and volatility.
+* **Factor 2 (MR2) - Peak Sharpness and Waveform Morphology (13.2% Variance):** Characterized by `kurtosis` (0.814), `crest_factor` (0.905), `shape_factor` (0.760), and `impulse_factor` (0.973). Captures paroxysmal spike transients.
+* **Factor 3 (MR3) - High-Frequency Rhythms and Oscillation Rate (12.5% Variance):** Governed by `zero_crossings` (0.852), `alpha_power` (0.716), `beta_power` (0.830), and `gamma_power` (0.757). Represents fast cerebral rhythms.
+* **Factor 4 (MR4) - Low-Frequency Rhythms:** Associated with `margin_factor` (0.613).
+* **Factor 5 (MR5) - Delta Band Power:** Dominated by `delta_power` (0.885), capturing slow-wave delta synchronization.
+* **Factor 6 (MR6) - Signal Skewness:** Characterized by distribution asymmetry (`skew`: 0.731).
+* **Factor 7 (MR7) - High-Resolution Wavelet Residuals:** Captures localized high-frequency detail coefficients (`wavelet_energy_level_1`, `level_2`).
 
-* **Các biến ảnh hưởng lớn:** `std` (0.975), `var` (0.985), `min` (-0.920), `max` (0.879), `rms` (0.984), `abs_max` (0.944), và toàn bộ các biến `wavelet_energy_level_1→5` (từ 0.722 đến 0.811).
-* **Diễn giải:** Nhân tố này thể hiện **độ mạnh của tín hiệu**: năng lượng cao, biên độ lớn, dao động mạnh — là đặc điểm nổi bật trong các cơn co giật.
-
----
-
-**Nhân tố 2 (MR2): Đặc tính Đỉnh và Hình dạng Sóng**
-
-Nhân tố này liên quan đến cấu trúc "đỉnh nhọn" và hình dạng tổng thể của sóng EEG.
-
-* **Các biến ảnh hưởng lớn:** `kurtosis` (0.814), `crest_factor` (0.905), `shape_factor` (0.760), `impulse_factor` (0.973).
-* **Diễn giải:** MR2 phản ánh **độ nhọn và độ sắc** của sóng EEG – những đặc trưng thường thấy trong các xung đột ngột và đỉnh tín hiệu cao.
-
----
-
-**Nhân tố 3 (MR3): Hoạt động Tần số Cao và Mức độ Dao động**
-
-Nhân tố này mô tả hoạt động ở các dải tần alpha, beta, gamma và tần suất dao động nhanh.
-
-* **Các biến ảnh hưởng lớn:** `zero_crossings` (0.852), `alpha_power` (0.716), `beta_power` (0.830), `gamma_power` (0.757).
-* **Diễn giải:** MR3 đại diện cho tình trạng não bộ tỉnh táo, tập trung cao độ hoặc hưng phấn, đặc trưng bởi tín hiệu dao động nhanh và năng lượng mạnh ở dải tần cao.
-
----
-
-**Nhân tố 4 (MR4): Hoạt động Tần số Thấp**
-
-Nhân tố này đại diện cho năng lượng tín hiệu ở các dải tần thấp.
-
-* **Biến ảnh hưởng lớn:** `margin_factor` (0.613).
-* **Diễn giải:**  MR4 có thể liên quan đến trạng thái thư giãn sâu hoặc giảm mức hoạt động thần kinh, thường thấy khi có ưu thế ở các dao động chậm như theta hoặc delta.
-
----
-
-**Nhân tố 5 (MR5): Cấu trúc Mép Sóng và Đặc tính Biên**
-
-Nhân tố này ảnh hưởng bởi một số biến về hình dạng biên của sóng.
-
-* **Biến ảnh hưởng lớn:** `delta_power` (0.885).
-* **Diễn giải:** MR5 cho thấy sự hiện diện mạnh mẽ của sóng delta, đặc trưng cho trạng thái ngủ sâu, mất ý thức, hoặc có thể xuất hiện trong các cơn co giật.
-
----
-
-**Nhân tố 6 (MR6): Độ Lệch (Skewness)**
-
-Là một nhân tố yếu, chỉ bị ảnh hưởng bởi một biến rõ rệt.
-
-* **Biến ảnh hưởng lớn:** `skew` (0.731).
-* **Diễn giải:** MR6 thể hiện **mức độ lệch trái hoặc lệch phải** trong phân bố biên độ tín hiệu.
-
----
-
-**Nhân tố 7 (MR7): Tàn dư năng lượng Wavelet**
-
-Mặc dù một số biến wavelet đã tải lên MR1, nhưng MR7 vẫn giữ lại phần năng lượng chưa được giải thích.
-
-* **Biến ảnh hưởng lớn:** `wavelet_energy_level_1` (0.577), `wavelet_energy_level_2` (0.626), `wavelet_energy_level_3` (0.423).
-* **Diễn giải:** MR7 bổ sung cho MR1 bằng cách **bắt các dao động nhỏ hơn trong năng lượng phân giải theo wavelet**.
-
----
-
-**Đánh giá bảng dưới:**
-
-* **SS loadings:** Tổng bình phương tải trọng (giống eigenvalue trong PCA). MR1 = 8.947 là nhân tố quan trọng nhất.
-* **Proportion Var:** MR1 chiếm 35.8%, MR2 là 13.2%, MR3 là 12.5%…
-* **Cumulative Var:** **7 nhân tố đầu giải thích 78.0% phương sai tổng**, cho thấy kết cấu dữ liệu EEG có thể được tóm lược khá hiệu quả bởi 7 thành phần tiềm ẩn.
-
----
+*Cumulative Variance:* The 7 latent factors account for **78.0% of total cumulative variance**, condensing the feature space into interpretable neurophysiological dimensions.
 
 ```{r}
-library(tidytext) # Cần cho việc sắp xếp trong mỗi panel
-# Lấy ma trận tải trọng và chuyển sang dạng dài (giữ nguyên)
+library(tidytext)
+
+# Extract and pivot factor loadings
 loadings_matrix <- fa_result$loadings
 loadings_long <- as.data.frame(loadings_matrix[,]) %>%
   mutate(feature = rownames(.)) %>%
@@ -403,189 +322,142 @@ loadings_long <- as.data.frame(loadings_matrix[,]) %>%
     values_to = "loading"
   )
 
-# Lặp qua từng nhân tố (factor) để vẽ và in ra biểu đồ riêng biệt
+# Plot factor loadings across each latent construct
 factor_names <- unique(loadings_long$factor)
 
 for (factor_name in factor_names) {
+  plot_data <- loadings_long %>% filter(factor == factor_name)
   
-  # Lọc dữ liệu chỉ cho nhân tố hiện tại
-  plot_data <- loadings_long %>%
-    filter(factor == factor_name)
-  
-  # Tạo biểu đồ cho nhân tố hiện tại
   p <- ggplot(plot_data, aes(y = loading, 
                              x = reorder(feature, loading), 
-                             fill = loading > 0)) + # Tô màu khác nhau cho giá trị âm/dương
+                             fill = loading > 0)) +
     geom_col(show.legend = FALSE) +
-    coord_flip() + # Lật trục để dễ đọc tên đặc trưng
+    coord_flip() +
     labs(
-      title = paste("Tải trọng của các Đặc trưng trên Nhân tố", factor_name), # Tiêu đề động
-      x = "Đặc trưng (Feature)",
-      y = "Giá trị Tải trọng (Loading)"
+      title = paste("Feature Loadings for Factor", factor_name),
+      x = "Feature",
+      y = "Loading Value"
     ) +
     theme_minimal() +
     theme(
       plot.title = element_text(size = 16, face = "bold")
     )
   
-  # In biểu đồ ra output
   print(p)
 }
 ```
 
 ---
 
-Ta vẽ MR1 và MR2 biểu thị cho giải thích khoarngf4 49% phương sai.
 ```{r}
-# Trích xuất điểm số nhân tố (Factor Scores)
+# Extract factor scores
 factor_scores <- as.data.frame(fa_result$scores)
 
-# Kết hợp điểm số với nhãn lớp để vẽ biểu đồ
+# Merge factor scores with class labels
 fa_data_for_plot <- bind_cols(factor_scores, Class = y_labels_factor)
 
-# Vẽ biểu đồ phân tán
-# Chúng ta sẽ vẽ 2 nhân tố đầu tiên: MR1 và MR2
+# Scatter plot of first two factors (MR1 vs MR2)
 ggplot(fa_data_for_plot, aes(x = MR1, y = MR2, color = Class)) +
   geom_point(alpha = 0.6) +
   labs(
-    title = "Biểu đồ phân tán của Phân tích Nhân tố",
-    subtitle = "Hiển thị sự phân bố dữ liệu trên không gian 2 nhân tố đầu tiên",
-    x = "Nhân tố 1 (MR1): Năng lượng & Biên độ tổng thể", # Diễn giải từ file .Rmd của bạn
-    y = "Nhân tố 2 (MR2): Đặc tính Đỉnh & Hình dạng sóng" # Diễn giải từ file .Rmd của bạn
+    title = "Factor Analysis Latent Score Projection",
+    subtitle = "Sample distribution across MR1 (Energy/Amplitude) and MR2 (Peak Morphology)",
+    x = "Factor 1 (MR1): Overall Energy & Amplitude",
+    y = "Factor 2 (MR2): Peak Characteristics & Waveform Shape"
   ) +
   theme_minimal() +
-  scale_color_manual(values = c("0" = "#00AFBB", "1" = "#E7B800"), name = "Lớp") +
-  # Thêm đường kẻ x=0 và y=0 để làm rõ các góc phần tư
+  scale_color_manual(values = c("0" = "#00AFBB", "1" = "#E7B800"), name = "Class") +
   geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5) +
   geom_vline(xintercept = 0, linetype = "dashed", alpha = 0.5)
 ```
-**Nhận xét:**
-Biểu đồ cho thấy phần lớn các điểm dữ liệu thuộc nhãn **1** (màu vàng – biểu thị cơn động kinh) bị chồng lấn lên vùng của nhãn **0** (màu xanh – biểu thị trạng thái bình thường). Điều này cho thấy sự phân tách giữa hai lớp chưa rõ ràng trong không gian hai chiều của hai nhân tố chính đầu tiên. Do đó, việc trực quan hóa dữ liệu chỉ bằng hai nhân tố này là chưa đủ để phân biệt hiệu quả giữa các trạng thái não. 
 
-## 4.3. Phân tích Phương sai Đa biến (MANOVA)
+**Observation:**
+While distinct clusters emerge along MR1 and MR2, significant overlap remains in the linear two-factor projection, reinforcing the need for non-linear manifold exploration.
 
-Chúng ta sẽ sử dụng MANOVA để kiểm tra xem có sự khác biệt thống kê giữa vector trung bình của các đặc trưng trong hai nhóm "co giật" và "không co giật" hay không.
+## 4.3. Multivariate Analysis of Variance (MANOVA)
 
-### 4.3.1 Kiểm định giả thuyết MANOVA
-Trức khi kiểm định MANOVA, chúng ta cần kiểm tra hai giả định quan trọng.
+MANOVA formally tests whether group mean vectors across all features differ significantly between the Seizure and Non-Seizure cohorts.
 
-1. *Giả định về tính đồng nhất của ma trận hiệp phương sai*
+### 4.3.1. Diagnostic Assumption Testing
 
-Chúng ta sử dụng kiểm định Box's M để kiểm tra xem ma trận hiệp phương sai của các đặc trưng có đồng nhất giữa hai nhóm hay không.
-
-- $H_0:$ Các ma trận hiệp phương sai của các nhóm là bằng nhau
-
-- $H_a:$ Có ít nhất một ma trận hiệp phương sai là khác biệt.
+1. *Homogeneity of Covariance Matrices (Box's M Test)*
+- $H_0$: Covariance matrices are equal across groups ($\Sigma_1 = \Sigma_0$).
+- $H_a$: Covariance matrices differ ($\Sigma_1 \ne \Sigma_0$).
 
 ```{r}
 boxm_result <- boxM(data = X_features_scaled, grouping = y_labels_factor)
 print(boxm_result)
 ```
 
-**Nhận xét:** Kết quả kiểm định Box’s M cho p-value rất nhỏ (p < 2.2e-16), dẫn đến bác bỏ giả thuyết \$H\_0\$. Tức là giả định về tính đồng nhất của ma trận hiệp phương sai **không được đáp ứng**. Tuy nhiên, kiểm định này **rất nhạy với cỡ mẫu lớn** (11.500 quan sát), nên dễ dẫn đến kết quả có ý nghĩa thống kê ngay cả khi khác biệt không đáng kể. Vì vậy, khi thực hiện MANOVA, chúng ta **ưu tiên sử dụng chỉ số Pillai’s Trace** – một chỉ số được chứng minh là bền vững hơn khi giả định này bị vi phạm.
+**Observation:** Box’s M yields $p < 2.2 \times 10^{-16}$, rejecting $H_0$. Because Box's M is exceptionally sensitive to large sample sizes ($N = 11,500$), we rely on **Pillai’s Trace**, which is robust to covariance heterogeneity.
 
-2. *Giả định về tính chuẩn đa biến*
-
-Với cỡ mẫu lớn, kiểm định Shapiro-Wilk không còn phù hợp do quá nhạy. Thay vào đó, chúng ta sử dụng Henze-Zirkler's test – một kiểm định thống kê bền vững hơn, phù hợp cho dữ liệu đa biến với cỡ mẫu lớn.
-
-- $H_0:$ Dữ liệu tuân theo phân phối chuẩn đa biến
-
-- $H_a:$ Dữ liệu không tuân theo phân phối chuẩn đa biến
+2. *Multivariate Normality Testing (Henze-Zirkler)*
+- $H_0$: Data follows a multivariate normal distribution.
+- $H_a$: Data deviates from multivariate normality.
 
 ```{r}
 library(MVN)
 
-# Chạy và xem kết quả được in trực tiếp ra Console
-cat("--- Kết quả kiểm định chuẩn đa biến cho nhóm Non-Seizure (0) ---\n")
+cat("--- Multivariate Normality Test: Non-Seizure Group (0) ---\n")
 MVN::mvn(data = X_features_scaled[y_labels_factor == "0", ])
 
-cat("\n--- Kết quả kiểm định chuẩn đa biến cho nhóm Seizure (1) ---\n")
+cat("\n--- Multivariate Normality Test: Seizure Group (1) ---\n")
 MVN::mvn(data = X_features_scaled[y_labels_factor == "1", ])
 ```
-**Nhận xét:** Kết quả từ kiểm định Henze-Zirkler cho thấy p-value của cả hai nhóm đều rất nhỏ (p < 0.001), do đó chúng ta bác bỏ giả thuyết \$H\_0\$ và kết luận rằng dữ liệu **không tuân theo phân phối chuẩn đa biến**.
 
-### 4.3.2. Thực hiện kiểm định MANOVA
+**Observation:** The Henze-Zirkler test rejects multivariate normality for both classes ($p < 0.001$).
 
-Các giả thuyết thống kê cho phép kiểm định này là:
+### 4.3.2. Executing MANOVA Test
 
-* **\$H\_0\$**: Không có sự khác biệt có ý nghĩa thống kê về vector trung bình giữa hai nhóm:
-  $\mu_{\text{co\_giật}} = \mu_{\text{không\_co\_giật}}$
-
-* **\$H\_a\$**: Có ít nhất một khác biệt có ý nghĩa thống kê giữa vector trung bình hai nhóm:
-  $\mu_{\text{co\_giật}} \ne \mu_{\text{không\_co\_giật}}$
+Hypotheses:
+* **$H_0$**: Population mean vectors of features are identical across classes: $\boldsymbol{\mu}_{\text{seizure}} = \boldsymbol{\mu}_{\text{non-seizure}}$
+* **$H_a$**: At least one feature mean differs: $\boldsymbol{\mu}_{\text{seizure}} \ne \boldsymbol{\mu}_{\text{non-seizure}}$
 
 ```{r manova-analysis}
-# Thực hiện MANOVA
+# Execute MANOVA
 manova_result <- manova(as.matrix(X_features_scaled) ~ y_labels_factor)
-summary(manova_result, test = "Wilks")
+summary(manova_result, test = "Pillai")
 ```
-**Kết luận:** Mặc dù cả hai giả định chính của MANOVA đều bị vi phạm, kết quả từ chỉ số **Pillai’s Trace** vẫn cho p-value cực kỳ nhỏ (p < 2.2e-16). Điều này cho thấy **sự khác biệt có ý nghĩa thống kê rất rõ ràng** giữa hai nhóm.
 
-Phát hiện này khẳng định rằng bộ đặc trưng đã trích xuất **có khả năng phân biệt mạnh mẽ giữa nhóm co giật và không co giật**, cho thấy tiềm năng sử dụng trong phân tích hoặc mô hình phân loại sau này.
+**Conclusion:** Pillai's Trace statistic is highly significant ($p < 2.2 \times 10^{-16}$), confirming that feature centroids between seizure and non-seizure populations differ substantially.
 
-# V. Phương pháp Trực quan Phi tuyến
-Sau khi khám phá dữ liệu bằng các phương pháp tuyến tính như PCA và Phân tích Nhân tố (FA), chúng ta nhận thấy rằng mặc dù có sự khác biệt giữa hai lớp, vẫn tồn tại vùng chồng lấn đáng kể. Điều này gợi ý rằng ranh giới phân tách giữa hai trạng thái "co giật" và "không co giật" có thể không đơn thuần là tuyến tính.
+# V. Non-linear Manifold Visualizations
 
-Để có được cái nhìn rõ nét hơn về cấu trúc phân cụm trong dữ liệu, chúng ta sử dụng hai phương pháp giảm chiều phi tuyến phổ biến: **t-SNE** và **UMAP**. Cả hai đều nổi bật trong việc ánh xạ dữ liệu từ không gian nhiều chiều xuống không gian 2D, đồng thời bảo toàn cấu trúc "lân cận" giữa các điểm dữ liệu – tức là đưa các điểm tương tự nhau lại gần nhau trên biểu đồ, từ đó giúp làm nổi bật các cụm tiềm ẩn trong dữ liệu.
+Given the non-linear boundaries identified in linear projections (PCA/FA), we employ **t-SNE** and **UMAP** to project high-dimensional feature spaces onto 2D while preserving localized neighborhood topology.
 
-## 5.1. Trực quan hóa bằng t-SNE và UMAP
-
-t-SNE và UMAP là các kỹ thuật mạnh mẽ để trực quan hóa dữ liệu nhiều chiều trong không gian 2D. 
+## 5.1. t-SNE and UMAP Projections
 
 ```{r tsne-umap-analysis}
-# Đặt seed để kết quả của t-SNE và UMAP có thể tái lập
-set.seed(42)
+set.seed(42) # For reproducibility
 
-# t-SNE trên toàn bộ dữ liệu
-cat("Đang chạy t-SNE trên toàn bộ 11,500 điểm dữ liệu...\n")
+# t-SNE on full dataset
+cat("Running t-SNE on 11,500 samples...\n")
 tsne_out <- Rtsne(X_features_scaled, dims = 2, perplexity = 30, verbose = FALSE, max_iter = 500)
 df_tsne <- tibble(Dim1 = tsne_out$Y[,1], Dim2 = tsne_out$Y[,2], Class = y_labels_factor)
 p_tsne <- ggplot(df_tsne, aes(x = Dim1, y = Dim2, color = Class)) + 
   geom_point(alpha = 0.7) + 
-  labs(title = "t-SNE trên toàn bộ dữ liệu") + 
+  labs(title = "t-SNE Projection (Full Dataset)") + 
   theme_minimal()
 
-# UMAP trên toàn bộ dữ liệu
-cat("Đang chạy UMAP trên toàn bộ 11,500 điểm dữ liệu...\n")
+# UMAP on full dataset
+cat("Running UMAP on 11,500 samples...\n")
 umap_out <- uwot::umap(X_features_scaled, n_neighbors = 15, min_dist = 0.1, n_components = 2)
 df_umap <- tibble(Dim1 = umap_out[,1], Dim2 = umap_out[,2], Class = y_labels_factor)
 p_umap <- ggplot(df_umap, aes(x = Dim1, y = Dim2, color = Class)) + 
   geom_point(alpha = 0.7) + 
-  labs(title = "UMAP trên toàn bộ dữ liệu") + 
+  labs(title = "UMAP Projection (Full Dataset)") + 
   theme_minimal()
 
-# So sánh kết quả
-cat("Đang vẽ biểu đồ...\n")
+# Side-by-side comparison
+cat("Rendering manifold plots...\n")
 p_tsne + p_umap
 ```
-**Nhận xét:** Cả hai biểu đồ đều thể hiện sự phân tách rõ ràng giữa hai nhóm dữ liệu. Các điểm thuộc nhóm "Seizure" và "Non-Seizure" hình thành nên hai cụm gần như riêng biệt, với rất ít điểm bị chồng lấn. Trong đó, UMAP cho thấy khả năng bảo toàn cấu trúc toàn cục tốt hơn so với t-SNE. Kết quả này củng cố giả thuyết rằng bộ đặc trưng hiện tại có **khả năng phân biệt mạnh mẽ** giữa hai trạng thái.
 
----
+**Observation:** Both t-SNE and UMAP reveal stark cluster separation between Seizure and Non-Seizure cohorts with minimal inter-class overlap. UMAP in particular preserves continuous manifold trajectories. This demonstrates that the engineered feature set possesses strong non-linear discriminatory capacity.
 
-## 5.2. So sánh với PCA và FA
+## 5.2. Comparative Synthesis: PCA, FA, t-SNE, and UMAP
 
-Việc so sánh các phương pháp giảm chiều như PCA, FA, t-SNE và UMAP cho thấy mỗi kỹ thuật phản ánh một khía cạnh khác nhau của cấu trúc dữ liệu khi chiếu xuống không gian thấp chiều.
-
-* **PCA (Phân tích Thành phần Chính):**
-
-  * Giữ lại phần lớn phương sai của dữ liệu (56.7% trong hai thành phần đầu).
-  * Dễ nhận thấy sự khác biệt giữa hai lớp theo trục thành phần thứ nhất.
-  * Tuy nhiên, vẫn có sự chồng lấn đáng kể giữa hai lớp, do đây là phương pháp tuyến tính.
-
-* **FA (Phân tích Nhân tố):**
-
-  * Hữu ích trong việc phát hiện các cấu trúc nhân tố tiềm ẩn.
-  * Tuy nhiên, trên biểu đồ 2D, khả năng phân tách giữa các lớp không cải thiện nhiều so với PCA.
-
-* **t-SNE và UMAP:**
-
-  * Là các kỹ thuật phi tuyến, không cố gắng giữ lại phương sai toàn cục mà tập trung vào việc bảo toàn cấu trúc lân cận.
-  * Cả hai đều cho thấy sự phân cụm rõ ràng và gần như tách biệt hoàn toàn giữa hai lớp trong không gian 2D.
-
----
-
-**Kết luận:**
-
-Kết quả từ t-SNE và UMAP cho thấy cấu trúc phân lớp trong dữ liệu **không hoàn toàn tuyến tính** – điều mà các phương pháp như PCA hay FA không thể hiện rõ. Tuy nhiên, **các đặc trưng được giữ lại qua PCA vẫn chứa đủ thông tin** để mô hình học máy có thể khai thác được ranh giới phân loại, kể cả khi nó phi tuyến.
-
----
+* **PCA:** Preserves global variance (56.7% in 2 components), separating classes along Dim1, but constrained by linear orthogonality.
+* **Factor Analysis:** Illuminates 7 neurophysiological latent dimensions (78.0% cumulative variance).
+* **t-SNE and UMAP:** Confirm clear, non-linear class separation in low dimensions.
+* **Implications for Modeling:** The non-linear separability suggests kernelized non-linear classifiers (such as SVM-RBF or Random Forest) will achieve superior performance over linear alternatives (such as LDA).
