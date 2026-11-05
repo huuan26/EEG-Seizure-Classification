@@ -49,8 +49,8 @@ The research pipeline is organized into four main stages:
 ```text
 EEG-Seizure-Classification/
 ├── data/
-│   ├── raw/                 # Raw dataset (Epileptic Seizure Recognition.csv)
-│   └── processed/           # Extracted feature sets (EEG_Features_Extracted.csv)
+│   ├── raw/                 # Raw dataset 
+│   └── processed/           # Extracted feature sets 
 ├── notebooks/
 │   ├── 01_feature_engineering.Rmd       # Feature extraction implementation & visualizations
 │   ├── 02_eda_and_dim_reduction.Rmd     # Statistical tests, PCA, FA, t-SNE, and UMAP
